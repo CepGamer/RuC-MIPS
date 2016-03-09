@@ -25,6 +25,7 @@ typedef enum
     JAL,
     LA_,
     LW,
+    ADD,
     ADDI,
     MOVE
 } Instructions;
@@ -34,7 +35,9 @@ typedef enum
     SAVED,
     TEMP,
     STACK,
-    MEM
+    MEM,
+    STATIC,
+    GARBAGE
 } Emplacement;
 
 #endif //RUC2_MIPS_DEFS_H
