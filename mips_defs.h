@@ -23,11 +23,14 @@ typedef enum
     J,
     JR,
     JAL,
+    LI_,
     LA_,
     LW,
+    SW,
     ADD,
     ADDI,
-    MOVE
+    MOVE,
+    SYSCALL
 } Instructions;
 
 typedef enum
@@ -37,7 +40,8 @@ typedef enum
     STACK,
     MEM,
     STATIC,
-    GARBAGE
+    GARBAGE,
+    OTHER
 } Emplacement;
 
 #endif //RUC2_MIPS_DEFS_H
