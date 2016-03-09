@@ -45,14 +45,16 @@ typedef struct
     Value value;
 } Operation;
 
-Operation temp_regs[] = {0,0,0,0,0,0,0,0,0,0};
 int temp_regs_count = 10;
-Operation saved_regs[] = {0,0,0,0,0,0,0,0};
-int saved_regs_count = 9;
+ValueEntry* temp_regs[10] = {0};
+int saved_regs_count = 8;
+ValueEntry* saved_regs[8] = {0};
 Operation op_stack[100] = {0};
-Operation val_stack[1000] = {0};
-ValueEntry mips_identref[10000] = {0};
-int op_sp, val_sp;
+ValueEntry* val_stack[1000] = {0};
+ValueEntry* static_vals[100] = {0};
+ValueEntry all_values[1000] = {0};
+ValueEntry* mips_identref[10000] = {0};
+int op_sp, val_sp, all_values_sp;
 
 DataEntry data_entries[1000];
 Instruction initialise_instr[1000], code_instr[10000];
@@ -63,6 +65,19 @@ int level;
 char * name_from_identref(int identref)
 {
     return reprtab + ((identab[identref + 1] + 2 < 28 ? 8 : identab[identref + 1]) + 2);
+}
+
+Registers val_to_reg(ValueEntry *val)
+{
+    switch(val->emplacement)
+    {
+    case TEMP:
+        if(val->value.integer < 8)
+            return $t0 + val->value.integer;
+        else
+            return $t8 + val->value.integer - 8;
+        break;
+    }
 }
 
 char * reg_to_string(Registers reg)
@@ -76,6 +91,14 @@ char * reg_to_string(Registers reg)
         return "$v1";
     case $t0:
         return "$t0";
+    case $t1:
+        return "$t1";
+    case $t2:
+        return "$t2";
+    case $t3:
+        return "$t3";
+    case $t4:
+        return "$t4";
     case $sp:
         return "$sp";
     case $ra:
@@ -102,6 +125,12 @@ void write_op(Instruction instr)
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , instr.third_op);
+        break;
+    case ADD:
+        fprintf(output, "add\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
         break;
     case MOVE:
         fprintf(output, "move\t%s,%s\n"
@@ -139,10 +168,9 @@ void process_declaration();
 void process_function();
 void process_expression();
 
-Registers select_tempreg()
-{
-    return $t0;
-}
+ValueEntry *process_assign(int code);
+ValueEntry *process_assign_at(int code);
+ValueEntry *process_binop(int code);
 
 Registers get_reg_from_instr(Instruction instr)
 {
@@ -172,30 +200,74 @@ Value eval_static()
     return ret;
 }
 
-ValueEntry pop()
+void load_value(ValueEntry *val)
 {
-    ValueEntry ret;
+    int i;
+    static int nxt = 0;
+    Instruction instr;
+    if(val->emplacement == TEMP || val->emplacement == SAVED)
+        return;
+    for(i = 0; i < temp_regs_count; ++i)
+        if(!temp_regs[i] || temp_regs[i]->emplacement != TEMP)
+        {
+            if(val->emplacement == STATIC)
+            {
+                ValueEntry t;
+                t.emplacement = TEMP;
+                t.value.integer = i;
+                instr.code = ADDI;
+                instr.first_op = val_to_reg(&t);
+                instr.second_op = $0;
+                instr.third_op = val->value.integer;
+                code_instr[curCode++] = instr;
+            } else if(val->emplacement == MEM)
+            {
+                ValueEntry t;
+                t.emplacement = TEMP;
+                t.value.integer = i;
+                instr.code = LA_;
+                instr.first_op = val_to_reg(&t);
+                instr.second_op = (char*)val->value.pointer;
+                code_instr[curCode++] = instr;
+                instr.code = LW;
+                instr.first_op = code_instr[curCode - 1].first_op;
+                instr.second_op = code_instr[curCode - 1].first_op;
+                instr.third_op = 0;
+                code_instr[curCode++] = instr;
+            }
+            val->emplacement = TEMP;
+            val->value.integer = i;
+            temp_regs[i] = val;
+            return;
+        }
+    temp_regs[nxt]->emplacement = STACK;
+    temp_regs[nxt]->value.integer = val_sp;
+    //  TODO
+    //  Add instruction
+//    instr.code =
+    val_stack[val_sp++] = temp_regs[nxt];
+    val->emplacement = TEMP;
+    val->value.integer = nxt;
+    temp_regs[nxt++] = val;
+}
+
+ValueEntry* pop()
+{
+    ValueEntry* ret;
     Instruction instr;
     switch (op_stack[op_sp].code) {
     case TConst:
-        ret = op_stack[op_sp];
+        ret = &all_values[all_values_sp++];
+        ret->value = op_stack[op_sp].value;
+        ret->emplacement = STATIC;
         break;
     case TIdenttoval:
     {
-        ValueEntry val = mips_identref[op_stack[op_sp].value.integer];
-        switch (val.emplacement) {
+        ret = mips_identref[op_stack[op_sp].value.integer];
+        switch (ret->emplacement)
+        {
         case MEM:
-            instr.code = LA_;
-            instr.first_op = select_tempreg();
-            instr.second_op = name_from_identref(op_stack[op_sp].value.integer);
-            code_instr[curCode++] = instr;
-            instr.code = LW;
-            instr.first_op = code_instr[curCode - 1].first_op;
-            instr.second_op = code_instr[curCode - 1].first_op;
-            instr.third_op = 0;
-            code_instr[curCode++] = instr;
-            ret.emplacement = TEMP;
-            ret.value = instr.first_op;
+            load_value(ret);
             break;
         default:
             break;
@@ -204,6 +276,7 @@ ValueEntry pop()
     default:
         break;
     }
+    op_sp--;
     return ret;
 }
 
@@ -212,30 +285,78 @@ void eval_dynamic()
     Instruction instr;
     while(op_sp--)
     {
-        switch (op_stack[op_sp].code) {
-        case TReturnval:
-            instr.code = MOVE;
-            instr.first_op = $v0;
-            instr.second_op = get_reg_from_instr(code_instr[curCode - 1]);
-            code_instr[curCode++] = instr;
-            instr.code = JR;
-            instr.first_op = $ra;
-            code_instr[curCode++] = instr;
-            break;
-        case LPLUS:
-        {
-            ValueEntry a, b;
-            a = pop();
-            b = pop();
-
-            break;
-        }
-        default:
-            break;
-        }
+        ValueEntry *prev;
+        int c = op_stack[op_sp--].code;
+        if ((c >= ASS && c <= DIVASS) ||
+            (c >= ASSV && c <= DIVASSV) ||
+            (c >= PLUSASSR && c <= DIVASSR) ||
+            (c >= PLUSASSRV && c <= DIVASSRV) ||
+            (c >= POSTINC && c <= DEC) ||
+            (c >= POSTINCV && c <= DECV) ||
+            (c >= POSTINCR && c <= DECR) ||
+            (c >= POSTINCRV && c <= DECRV))
+            prev = process_assign(c);
+        else if ((c >= ASSAT && c <= DIVASSAT) ||
+            (c >= ASSATV && c <= DIVASSATV) ||
+            (c >= PLUSASSATR && c <= DIVASSATR) ||
+            (c >= PLUSASSATRV && c <= DIVASSATRV) ||
+            (c >= POSTINCAT && c <= DECAT) ||
+            (c >= POSTINCATV && c <= DECATV) ||
+            (c >= POSTINCATR && c <= DECATR) ||
+            (c >= POSTINCATRV && c <= DECATRV))
+            prev = process_assign_at(c);
+        else if ((c >= LREM && c <= LDIV && c != LOGAND && c != LOGOR) ||
+            (c >= EQEQR && c <= LDIVR))
+            prev = process_binop(c);
+        else
+            switch (c)
+            {
+            case TReturnval:
+                instr.code = MOVE;
+                instr.first_op = $v0;
+                instr.second_op = prev->value.integer;
+                code_instr[curCode++] = instr;
+                instr.code = JR;
+                instr.first_op = $ra;
+                code_instr[curCode++] = instr;
+                break;
+            default:
+                prev = pop();
+                break;
+            }
 
     }
     ++op_sp;
+}
+
+ValueEntry *process_assign(int code)
+{
+
+}
+
+ValueEntry *process_assign_at(int code)
+{
+
+}
+
+ValueEntry *process_binop(int code)
+{
+    ValueEntry *a, *b;
+    Instruction instr;
+    a = pop();
+    b = pop();
+    load_value(a);
+    load_value(b);
+    switch (code)
+    {
+    case LPLUS:
+        instr.code = ADD;
+        instr.first_op = instr.second_op = val_to_reg(a);
+        instr.third_op = val_to_reg(b);
+        code_instr[curCode++] = instr;
+        b->emplacement = GARBAGE;
+        break;
+    }
 }
 
 void process_declaration()
@@ -251,20 +372,20 @@ void process_declaration()
                     if (initref)
                     {
                         DataEntry data;
-                        ValueEntry val;
+                        ValueEntry *val = &all_values[all_values_sp++];
                         process_expression();
                         data.value = eval_static();
                         data.name = name_from_identref(identref);
                         data.type = LINT;
                         if(level)
                         {
-                            val.emplacement = STACK;
-                            val.value.integer = val_sp++ * 4;
+                            val->emplacement = STACK;
+                            val->value.integer = val_sp++ * 4;
                         }
                         else
                         {
-                            val.emplacement = MEM;
-                            val.value.pointer = name_from_identref(identref);
+                            val->emplacement = MEM;
+                            val->value.pointer = name_from_identref(identref);
                             data_entries[curData++] = data;
                         }
                         mips_identref[identref] = val;
@@ -357,7 +478,7 @@ void compile_mips()
     int i;
     out_mips = fopen(outfile, "w");
     curTree = curData = curInit = curCode = 0;
-    op_sp = val_sp = 0;
+    op_sp = val_sp = all_values_sp = 0;
     do
     {
         level = 0;
