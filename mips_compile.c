@@ -77,6 +77,8 @@ Registers val_to_reg(ValueEntry *val)
         else
             return $t8 + val->value.integer - 8;
         break;
+    case OTHER:
+        return val->value.integer;
     }
 }
 
@@ -89,6 +91,10 @@ char * reg_to_string(Registers reg)
         return "$v0";
     case $v1:
         return "$v1";
+    case $a0:
+        return "$a0";
+    case $a1:
+        return "$a1";
     case $t0:
         return "$t0";
     case $t1:
@@ -108,11 +114,14 @@ char * reg_to_string(Registers reg)
     }
 }
 
-void write_op(Instruction instr)
+void write_instr(Instruction instr)
 {
     switch (instr.code) {
     case J:
         fprintf(output, "j\t%s\nnop\n", (char *)instr.first_op);
+        break;
+    case JAL:
+        fprintf(output, "jal\t%s\nnop\n", (char *)instr.first_op);
         break;
     case JR:
         fprintf(output, "jr\t%s\nnop\n", reg_to_string(instr.first_op));
@@ -137,6 +146,11 @@ void write_op(Instruction instr)
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op));
         break;
+    case LI_:
+        fprintf(output, "li\t%s,%d\n"
+                , reg_to_string(instr.first_op)
+                , instr.second_op);
+        break;
     case LA_:
         fprintf(output, "la\t%s,%s\n"
                 , reg_to_string(instr.first_op)
@@ -147,6 +161,9 @@ void write_op(Instruction instr)
                 , reg_to_string(instr.first_op)
                 , instr.third_op
                 , reg_to_string(instr.second_op));
+        break;
+    case SYSCALL:
+        fprintf(output, "syscall\n");
         break;
     default:
         break;
@@ -210,11 +227,11 @@ void load_value(ValueEntry *val)
     for(i = 0; i < temp_regs_count; ++i)
         if(!temp_regs[i] || temp_regs[i]->emplacement != TEMP)
         {
+            ValueEntry t;
+            t.emplacement = TEMP;
+            t.value.integer = i;
             if(val->emplacement == STATIC)
             {
-                ValueEntry t;
-                t.emplacement = TEMP;
-                t.value.integer = i;
                 instr.code = ADDI;
                 instr.first_op = val_to_reg(&t);
                 instr.second_op = $0;
@@ -222,9 +239,6 @@ void load_value(ValueEntry *val)
                 code_instr[curCode++] = instr;
             } else if(val->emplacement == MEM)
             {
-                ValueEntry t;
-                t.emplacement = TEMP;
-                t.value.integer = i;
                 instr.code = LA_;
                 instr.first_op = val_to_reg(&t);
                 instr.second_op = (char*)val->value.pointer;
@@ -233,6 +247,13 @@ void load_value(ValueEntry *val)
                 instr.first_op = code_instr[curCode - 1].first_op;
                 instr.second_op = code_instr[curCode - 1].first_op;
                 instr.third_op = 0;
+                code_instr[curCode++] = instr;
+            }
+            else if(val->emplacement == OTHER)
+            {
+                instr.code = MOVE;
+                instr.first_op = val_to_reg(&t);
+                instr.second_op = val_to_reg(val);
                 code_instr[curCode++] = instr;
             }
             val->emplacement = TEMP;
@@ -255,38 +276,50 @@ ValueEntry* pop()
 {
     ValueEntry* ret;
     Instruction instr;
-    switch (op_stack[op_sp].code) {
-    case TConst:
-        ret = &all_values[all_values_sp++];
-        ret->value = op_stack[op_sp].value;
-        ret->emplacement = STATIC;
-        break;
-    case TIdenttoval:
-    {
-        ret = mips_identref[op_stack[op_sp].value.integer];
-        switch (ret->emplacement)
+    if(op_sp--)
+        switch (op_stack[op_sp].code)
         {
-        case MEM:
-            load_value(ret);
+        case TConst:
+            ret = &all_values[all_values_sp++];
+            ret->value = op_stack[op_sp].value;
+            ret->emplacement = STATIC;
+            break;
+        case TIdenttoval:
+        {
+            ret = mips_identref[op_stack[op_sp].value.integer];
+            switch (ret->emplacement)
+            {
+            case MEM:
+                load_value(ret);
+                break;
+            default:
+                break;
+            }
+            break;
+        }
+        case TCall2:
+            instr.code = JAL;
+            instr.first_op = op_stack[op_sp].value.pointer;
+            code_instr[curCode++] = instr;
+            ret = &all_values[all_values_sp++];
+            ret->emplacement = OTHER;
+            ret->value.integer = $v0;
             break;
         default:
             break;
         }
-    }
-    default:
-        break;
-    }
-    op_sp--;
+    else
+        ++op_sp;
     return ret;
 }
 
 void eval_dynamic()
 {
     Instruction instr;
+    static ValueEntry *prev;
     while(op_sp--)
     {
-        ValueEntry *prev;
-        int c = op_stack[op_sp--].code;
+        int c = op_stack[op_sp].code;
         if ((c >= ASS && c <= DIVASS) ||
             (c >= ASSV && c <= DIVASSV) ||
             (c >= PLUSASSR && c <= DIVASSR) ||
@@ -314,17 +347,38 @@ void eval_dynamic()
             case TReturnval:
                 instr.code = MOVE;
                 instr.first_op = $v0;
-                instr.second_op = prev->value.integer;
+                instr.second_op = val_to_reg(prev);
                 code_instr[curCode++] = instr;
                 instr.code = JR;
                 instr.first_op = $ra;
                 code_instr[curCode++] = instr;
                 break;
+            case TPrint:
+                switch (op_stack[op_sp].value.integer)
+                {
+                case LINT:
+                    prev = pop();
+                    load_value(prev);
+                    instr.code = LI_;
+                    instr.first_op = $v0;
+                    instr.second_op = 1;
+                    code_instr[curCode++] = instr;
+                    instr.code = MOVE;
+                    instr.first_op = $a0;
+                    instr.second_op = val_to_reg(prev);
+                    code_instr[curCode++] = instr;
+                    instr.code = SYSCALL;
+                    code_instr[curCode++] = instr;
+                    break;
+                default:
+                    break;
+                }
+                break;
             default:
+                ++op_sp;
                 prev = pop();
                 break;
             }
-
     }
     ++op_sp;
 }
@@ -341,7 +395,7 @@ ValueEntry *process_assign_at(int code)
 
 ValueEntry *process_binop(int code)
 {
-    ValueEntry *a, *b;
+    ValueEntry *a, *b, *ret;
     Instruction instr;
     a = pop();
     b = pop();
@@ -355,8 +409,10 @@ ValueEntry *process_binop(int code)
         instr.third_op = val_to_reg(b);
         code_instr[curCode++] = instr;
         b->emplacement = GARBAGE;
+        ret = a;
         break;
     }
+    return ret;
 }
 
 void process_declaration()
@@ -446,11 +502,26 @@ void process_expression()
             op_stack[op_sp++] = oper;
             break;
         case TIdent:
+            curTree++;
             break;
         case TIdenttoval:
             oper.code = TIdenttoval;
             oper.value.integer = tree[curTree++];
             op_stack[op_sp++] = oper;
+            break;
+        case TCall1:
+            curTree++;
+            break;
+        case TCall2:
+            oper.code = TCall2;
+            oper.value.pointer = name_from_identref(-tree[curTree++]);
+            op_stack[op_sp++] = oper;
+            break;
+        case TPrint:
+            oper.code = TPrint;
+            oper.value.integer = tree[curTree++];
+            op_stack[op_sp++] = oper;
+            return;
             break;
         case TReturn:
             instr.code = JR;
@@ -476,6 +547,7 @@ void process_expression()
 void compile_mips()
 {
     int i;
+    Instruction gotomain;
     out_mips = fopen(outfile, "w");
     curTree = curData = curInit = curCode = 0;
     op_sp = val_sp = all_values_sp = 0;
@@ -493,9 +565,12 @@ void compile_mips()
 
     fprintf(output, ".text\n");
     for(i = 0; i < curInit; i++)
-        write_op(initialise_instr[i]);
+        write_instr(initialise_instr[i]);
+    gotomain.code = J;
+    gotomain.first_op = name_from_identref(0);
+    write_instr(gotomain);
     for(i = 0; i < curCode; i++)
-        write_op(code_instr[i]);
+        write_instr(code_instr[i]);
 
     fclose(output);
     return;
