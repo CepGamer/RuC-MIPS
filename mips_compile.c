@@ -373,6 +373,19 @@ void eval_dynamic()
                 instr.first_op = $v0;
                 instr.second_op = val_to_reg(prev);
                 code_instr[curCode++] = instr;
+            case TReturn:
+                //  Возврат адреса окна функции
+                instr.code = LW;
+                instr.first_op = $fp;
+                instr.second_op = $sp;
+                instr.third_op = val_sp * 4;
+                code_instr[curCode++] = instr;
+                //  Возврат адреса возврата
+                instr.code = LW;
+                instr.first_op = $ra;
+                instr.second_op = $sp;
+                instr.third_op = (val_sp - 1) * 4;
+                code_instr[curCode++] = instr;
                 if(val_sp)
                 {
                     instr.code = ADDI;
@@ -517,13 +530,13 @@ void process_function()
     tmp.first_op = name_from_identref(identref);
     code_instr[curCode++] = tmp;
     curTree++;
-    ++val_sp;
+    val_sp += 2;
 
     //  Определения
     while (tree[curTree] == TDeclid)
         process_declaration();
 
-    //  Сохранение указателя на окно функции
+    //  Сохранение указателя на окно функции и адреса возврата
     tmp.code = ADDIU;
     tmp.first_op = $sp;
     tmp.second_op = $sp;
@@ -534,7 +547,12 @@ void process_function()
     tmp.second_op = $sp;
     tmp.third_op = val_sp * 4;
     code_instr[curCode++] = tmp;
-    //  Запись нового окна функции
+    tmp.code = SW;
+    tmp.first_op = $ra;
+    tmp.second_op = $sp;
+    tmp.third_op = (val_sp - 1) * 4;
+    code_instr[curCode++] = tmp;
+    //  Запись адреса нового окна функции
     tmp.code = MOVE;
     tmp.first_op = $fp;
     tmp.second_op = $sp;
@@ -586,17 +604,8 @@ void process_expression()
             return;
             break;
         case TReturn:
-            if(val_sp)
-            {
-                instr.code = ADDI;
-                instr.first_op = $sp;
-                instr.second_op = $sp;
-                instr.third_op = val_sp * 4;
-                code_instr[curCode++] = instr;
-            }
-            instr.code = JR;
-            instr.first_op = $ra;
-            code_instr[curCode++] = instr;
+            oper.code = TReturn;
+            op_stack[op_sp++] = oper;
             return;
         case TReturnval:
             oper.code = TReturnval;
