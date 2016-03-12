@@ -28,7 +28,9 @@ typedef enum
     LW,
     SW,
     ADD,
+    ADDU,
     ADDI,
+    ADDIU,
     MOVE,
     SYSCALL
 } Instructions;
