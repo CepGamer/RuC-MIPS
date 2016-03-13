@@ -20,17 +20,22 @@ typedef enum
 typedef enum
 {
     LABEL,
+    //  переходы
     J,
     JR,
     JAL,
+    BEQZ,
     LI_,
     LA_,
     LW,
     SW,
+    //  бинарные операции
     ADD,
     ADDU,
     ADDI,
     ADDIU,
+    //  сравнение
+    SLT,
     MOVE,
     SYSCALL
 } Instructions;
@@ -45,5 +50,40 @@ typedef enum
     GARBAGE,
     OTHER
 } Emplacement;
+
+typedef union {
+    int integer;
+    float floating;
+    char character;
+    void * pointer;
+} Value;
+
+typedef struct
+{
+    char * name;
+    int type;
+    int size;
+    Value value;
+} DataEntry;
+
+typedef struct
+{
+    Emplacement emplacement;
+    Value value;
+} ValueEntry;
+
+typedef struct
+{
+    Instructions code;
+    int first_op;
+    int second_op;
+    int third_op;
+} Instruction;
+
+typedef struct
+{
+    int code;
+    Value value;
+} Operation;
 
 #endif //RUC2_MIPS_DEFS_H
