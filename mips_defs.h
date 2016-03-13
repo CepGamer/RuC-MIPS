@@ -36,6 +36,7 @@ typedef enum
     ADDIU,
     //  сравнение
     SLT,
+    SGT,
     MOVE,
     SYSCALL
 } Instructions;
