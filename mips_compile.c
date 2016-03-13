@@ -159,6 +159,12 @@ void write_instr(Instruction instr)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
+    case SGT:
+        fprintf(output, "sgt\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        break;
     case MOVE:
         fprintf(output, "move\t%s,%s\n"
                 , reg_to_string(instr.first_op)
@@ -205,9 +211,10 @@ void write_data(DataEntry data)
     }
 }
 
-void process_declaration();
+void process_declaration(int old_val_sp);
 void process_function();
 void process_expression();
+void process_block();
 
 void process_for();
 void process_if();
@@ -314,8 +321,9 @@ ValueEntry* pop()
 {
     ValueEntry* ret;
     Instruction instr;
+    int c;
     if(op_sp--)
-        switch (op_stack[op_sp].code)
+        switch (c = op_stack[op_sp].code)
         {
         case TConst:
             ret = &all_values[all_values_sp++];
@@ -340,6 +348,27 @@ ValueEntry* pop()
             ret->value.integer = $v0;
             break;
         default:
+            if ((c >= ASS && c <= DIVASS) ||
+                (c >= ASSV && c <= DIVASSV) ||
+                (c >= PLUSASSR && c <= DIVASSR) ||
+                (c >= PLUSASSRV && c <= DIVASSRV) ||
+                (c >= POSTINC && c <= DEC) ||
+                (c >= POSTINCV && c <= DECV) ||
+                (c >= POSTINCR && c <= DECR) ||
+                (c >= POSTINCRV && c <= DECRV))
+                ret = process_assign(c);
+            else if ((c >= ASSAT && c <= DIVASSAT) ||
+                (c >= ASSATV && c <= DIVASSATV) ||
+                (c >= PLUSASSATR && c <= DIVASSATR) ||
+                (c >= PLUSASSATRV && c <= DIVASSATRV) ||
+                (c >= POSTINCAT && c <= DECAT) ||
+                (c >= POSTINCATV && c <= DECATV) ||
+                (c >= POSTINCATR && c <= DECATR) ||
+                (c >= POSTINCATRV && c <= DECATRV))
+                ret = process_assign_at(c);
+            else if ((c >= LREM && c <= LDIV && c != LOGAND && c != LOGOR) ||
+                (c >= EQEQR && c <= LDIVR))
+                ret = process_binop(c);
             break;
         }
     else
@@ -477,7 +506,8 @@ ValueEntry *process_assign(int code)
         (code >= PLUSASSRV && code <= DIVASSRV))
     {
         ValueEntry *a = pop(), *b = pop();
-        switch (code) {
+        switch (code)
+        {
         case ASS:
         case ASSV:
             assign_to_ValueEntry(b, a);
@@ -554,6 +584,14 @@ ValueEntry *process_binop(int code)
         b->emplacement = GARBAGE;
         ret = a;
         break;
+    case LGT:
+        instr.code = SGT;
+        instr.first_op = instr.third_op = val_to_reg(a);
+        instr.second_op = val_to_reg(b);
+        code_instr[curCode++] = instr;
+        b->emplacement = GARBAGE;
+        ret = a;
+        break;
     }
     return ret;
 }
@@ -600,22 +638,8 @@ void process_for()
     instr.first_op = -1;
     instr.second_op = body_label;
     code_instr[curCode++] = instr;
-    if(tree[tree[curTree]] == TBegin)
-    {
-        int forTree = tree[curTree] + 1;
-        while (tree[forTree] == TDeclid)
-            process_declaration();
-        while (tree[forTree] != TEnd)
-        {
-            process_expression();
-            eval_dynamic();
-        }
-    }
-    else
-    {
-        process_expression();
-        eval_dynamic();
-    }
+    process_block();
+
     instr.code = J;
     instr.first_op = -1;
     instr.second_op = incr_label;
@@ -629,7 +653,35 @@ void process_for()
 
 void process_if()
 {
-
+    int else_ref = tree[++curTree];
+    int else_label = curTempLabel++, exit_label = curTempLabel++;
+    ValueEntry *cond;
+    Instruction instr;
+    ++curTree;
+    //  условие
+    process_expression();
+    cond = eval_dynamic();
+    load_value(cond);
+    instr.code = BEQZ;
+    instr.first_op = val_to_reg(cond);
+    instr.second_op = -1;
+    instr.third_op = else_ref ? else_label : exit_label;
+    code_instr[curCode++] = instr;
+    //  если условие выполнено
+    process_block();
+    //  иначе
+    if(else_ref)
+    {
+        instr.code = LABEL;
+        instr.first_op = -1;
+        instr.second_op = else_label;
+        code_instr[curCode++] = instr;
+        process_block();
+    }
+    instr.code = LABEL;
+    instr.first_op = -1;
+    instr.second_op = exit_label;
+    code_instr[curCode++] = instr;
 }
 
 void process_while()
@@ -637,7 +689,7 @@ void process_while()
 
 }
 
-void process_declaration()
+void process_declaration(int old_val_sp)
 {
     switch (tree[curTree++])
     {
@@ -647,15 +699,19 @@ void process_declaration()
             switch (N)
             {
                 case 0:
-                    if (initref)
+                {
+                    DataEntry data;
+                    ValueEntry *val = &all_values[all_values_sp++];
+                    if(initref)
                     {
-                        DataEntry data;
-                        ValueEntry *val = &all_values[all_values_sp++];
                         process_expression();
                         data.value = eval_static();
-                        data.name = name_from_identref(identref);
-                        data.type = LINT;
-                        if(level)
+                    }
+                    data.name = name_from_identref(identref);
+                    data.type = LINT;
+                    if(level)
+                    {
+                        if (initref)
                         {
                             Instruction instr;
                             instr.code = ADDIU;
@@ -666,23 +722,24 @@ void process_declaration()
                             instr.code = SW;
                             instr.first_op = $t0;
                             instr.second_op = $sp;
-                            instr.third_op = -val_sp * 4;
+                            instr.third_op = -(val_sp - old_val_sp) * 4;
                             code_instr[curCode++] = instr;
-                            val->emplacement = STACK;
-                            val->value.integer = val_sp++;
                         }
-                        else
-                        {
-                            val->emplacement = MEM;
-                            val->value.pointer = name_from_identref(identref);
-                            data_entries[curData++] = data;
-                        }
-                        mips_identref[identref] = val;
-                        declarations[identref] = &all_values[all_values_sp++];
-                        declarations[identref]->emplacement = val->emplacement;
-                        declarations[identref]->value = val->value;
+                        val->emplacement = STACK;
+                        val->value.integer = val_sp++;
                     }
+                    else
+                    {
+                        val->emplacement = MEM;
+                        val->value.pointer = name_from_identref(identref);
+                        data_entries[curData++] = data;
+                    }
+                    mips_identref[identref] = val;
+                    declarations[identref] = &all_values[all_values_sp++];
+                    declarations[identref]->emplacement = val->emplacement;
+                    declarations[identref]->value = val->value;
                     break;
+                }
                 case 1:
                     break;
                 default:
@@ -714,7 +771,7 @@ void process_function()
 
     //  Определения
     while (tree[curTree] == TDeclid)
-        process_declaration();
+        process_declaration(0);
 
     //  Сохранение указателя на окно функции и адреса возврата
     tmp.code = ADDIU;
@@ -749,7 +806,7 @@ void process_function()
 
 void process_expression()
 {
-    while (tree[curTree] != TExprend)
+    while (tree[curTree] != TExprend && tree[curTree] != TEnd)
     {
         Operation oper;
         int c;
@@ -774,6 +831,8 @@ void process_expression()
             process_for();
             break;
         case TIf:
+            process_if();
+            break;
         case TWhile:
         case TCall1:
             curTree++;
@@ -830,7 +889,48 @@ void process_expression()
             break;
         }
     }
-    curTree++;
+    if(tree[curTree] == TExprend)
+        curTree++;
+}
+
+void process_block()
+{
+    int old_val_sp = val_sp;
+    Instruction instr;
+    if(tree[curTree] == TBegin)
+    {
+        ++curTree;
+        while (tree[curTree] == TDeclid)
+            process_declaration(old_val_sp);
+        //  рост стека
+        if(val_sp != old_val_sp)
+        {
+            instr.code = ADDIU;
+            instr.first_op = $sp;
+            instr.second_op = $sp;
+            instr.third_op = -(val_sp - old_val_sp) * 4;
+            code_instr[curCode++] = instr;
+        }
+        while (tree[curTree] != TEnd)
+        {
+            process_expression();
+            eval_dynamic();
+        }
+    }
+    else
+    {
+        process_expression();
+        eval_dynamic();
+    }
+    if(val_sp != old_val_sp)
+    {
+        instr.code = ADDIU;
+        instr.first_op = $sp;
+        instr.second_op = $sp;
+        instr.third_op = (val_sp - old_val_sp) * 4;
+        code_instr[curCode++] = instr;
+        val_sp = old_val_sp;
+    }
 }
 
 void compile_mips()
@@ -844,7 +944,7 @@ void compile_mips()
     do
     {
         level = 0;
-        process_declaration();
+        process_declaration(0);
         if(tree[curTree] == 0)
             break;
     } while(1);
