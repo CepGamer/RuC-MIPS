@@ -29,11 +29,14 @@ typedef enum
     LA_,
     LW,
     SW,
+    //  унарные операции
+    NEGU,
     //  бинарные операции
     ADD,
     ADDU,
     ADDI,
     ADDIU,
+    SLL,
     //  сравнение
     SLT,
     SGT,
