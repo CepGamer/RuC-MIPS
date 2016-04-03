@@ -52,6 +52,12 @@ typedef enum
     OTHER
 } Emplacement;
 
+typedef enum
+{
+    UPDATESINLOOP   = 0x01,
+    CONSTANT        = 0x02
+} Flags;
+
 typedef union {
     int integer;
     float floating;
@@ -65,6 +71,7 @@ typedef struct
     int type;
     int size;
     Value value;
+    int flags;
 } DataEntry;
 
 typedef struct
