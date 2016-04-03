@@ -156,6 +156,18 @@ void write_instr(Instruction instr)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
+    case ADDU:
+        fprintf(output, "addu\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        break;
+    case SLL:
+        fprintf(output, "sll\t%s,%s,%d\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , instr.third_op);
+        break;
     case SLT:
         fprintf(output, "slt\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
@@ -170,6 +182,11 @@ void write_instr(Instruction instr)
         break;
     case MOVE:
         fprintf(output, "move\t%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op));
+        break;
+    case NEGU:
+        fprintf(output, "negu\t%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op));
         break;
@@ -356,6 +373,61 @@ ValueEntry* pop()
             break;
         case TIdent:
             ret = declarations[op_stack[op_sp].value.integer];
+            break;
+        case TSliceident:
+        {
+            int identref = op_stack[op_sp].value.integer;
+            ret = &all_values[all_values_sp++];
+            ret->emplacement = GARBAGE;
+            load_value(ret);
+            if(declarations[identref]->emplacement == MEM)
+            {
+                instr.code = LA_;
+                instr.first_op = val_to_reg(ret);
+                instr.second_op = name_from_identref(identref);
+                code_instr[curCode++] = instr;
+            }
+            else
+            {
+                instr.code = MOVE;
+                instr.first_op = val_to_reg(ret);
+                instr.second_op = $sp;
+                code_instr[curCode++] = instr;
+                instr.code = ADDIU;
+                instr.first_op = val_to_reg(ret);
+                instr.second_op = val_to_reg(ret);
+                instr.third_op = (val_sp - declarations[identref]->value.integer) * 4;
+                code_instr[curCode++] = instr;
+            }
+        }
+            break;
+        case TAddrtoval:
+        {
+            ValueEntry *tmp;
+            tmp = pop();
+            ret = pop();
+            load_value(tmp);
+            load_value(ret);
+            instr.code = SLL;
+            instr.first_op = val_to_reg(tmp);
+            instr.second_op = instr.first_op;
+            instr.third_op = 2;
+            code_instr[curCode++] = instr;
+            instr.code = NEGU;
+            instr.first_op = val_to_reg(tmp);
+            instr.second_op = instr.first_op;
+            code_instr[curCode++] = instr;
+            instr.code = ADDU;
+            instr.first_op = val_to_reg(ret);
+            instr.second_op = instr.first_op;
+            instr.third_op = val_to_reg(tmp);
+            code_instr[curCode++] = instr;
+            instr.code = LW;
+            instr.first_op = val_to_reg(ret);
+            instr.second_op = instr.first_op;
+            instr.third_op = 0;
+            code_instr[curCode++] = instr;
+        }
             break;
         case TCall2:
             instr.code = JAL;
@@ -573,7 +645,34 @@ ValueEntry *process_assign(int code)
 
 ValueEntry *process_assign_at(int code)
 {
-
+    ValueEntry *a, *b, *ret;
+    Instruction instr;
+    a = pop();
+    b = pop();
+    load_value(a);
+    load_value(b);
+    instr.code = ADDU;
+    instr.first_op = val_to_reg(a);
+    instr.second_op = instr.first_op;
+    instr.third_op = val_to_reg(b);
+    code_instr[curCode++] = instr;
+    b = pop();
+    load_value(b);
+    switch (code)
+    {
+    case ASSAT:
+    case ASSATV:
+        instr.code = SW;
+        instr.first_op = val_to_reg(a);
+        instr.second_op = val_to_reg(b);
+        instr.third_op = 0;
+        code_instr[curCode++] = instr;
+        ret = b;
+        break;
+    default:
+        break;
+    }
+    return ret;
 }
 
 ValueEntry *process_binop(int code)
@@ -804,8 +903,8 @@ void process_declaration(int old_val_sp)
                     if(level)
                     {
                         val->emplacement = STACK;
-                        val->value.integer = op_sp;
-                        op_sp += size;
+                        val->value.integer = val_sp;
+                        val_sp += size;
                     }
                     else
                     {
@@ -890,19 +989,19 @@ void process_expression()
         switch (c = tree[curTree++])
         {
         case TConst:
-            oper.code = TConst;
-            oper.value.integer = tree[curTree++];
-            op_stack[op_sp++] = oper;
-            break;
         case TIdent:
-            oper.code = TIdent;
+        case TIdenttoval:
+            oper.code = c;
             oper.value.integer = tree[curTree++];
             op_stack[op_sp++] = oper;
             break;
-        case TIdenttoval:
-            oper.code = TIdenttoval;
+        case TSliceident:
+            if(op_sp && op_stack[op_sp - 1].code == TIdent)
+                --op_sp;
+            oper.code = TSliceident;
             oper.value.integer = tree[curTree++];
             op_stack[op_sp++] = oper;
+            process_expression();
             break;
         case TFor:
             process_for();
@@ -931,7 +1030,8 @@ void process_expression()
             op_stack[op_sp++] = oper;
             return;
         case TReturnval:
-            oper.code = TReturnval;
+        case TAddrtoval:
+            oper.code = c;
             op_stack[op_sp++] = oper;
             break;
         case TBegin:
