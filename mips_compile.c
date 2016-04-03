@@ -48,7 +48,10 @@ Registers val_to_reg(ValueEntry *val)
         break;
     case OTHER:
         return val->value.integer;
+    default:
+        break;
     }
+    return $0;
 }
 
 char * reg_to_string(Registers reg)
@@ -205,8 +208,20 @@ void write_data(DataEntry data)
     fprintf(output, "%s:\t", data.name);
     switch(data.type)
     {
+    int i;
     case LINT:
         fprintf(output, ".word\t%d\n", data.value.integer);
+        break;
+    case ROWOFINT:
+        if(data.value.pointer)
+        {
+            fprintf(output, ".word\t");
+            for(i = 0; i < data.size - 1; ++i)
+                fprintf(output, "%d, ", ((Value *)data.value.pointer)[i].integer);
+            fprintf(output, "%d\n", ((Value *)data.value.pointer)[data.size - 1].integer);
+        }
+        else
+            fprintf(output, ".space\t%d\n", data.size * sizeof(int));
         break;
     }
 }
@@ -232,7 +247,10 @@ Registers get_reg_from_instr(Instruction instr)
     case ADDI:
     case LW:
         return instr.first_op;
+    default:
+        break;
     }
+    return $0;
 }
 
 Value eval_static()
@@ -277,7 +295,7 @@ void load_value(ValueEntry *val)
             case MEM:
                 instr.code = LA_;
                 instr.first_op = val_to_reg(&t);
-                instr.second_op = (char*)val->value.pointer;
+                instr.second_op = (int)(char*)val->value.pointer;
                 code_instr[curCode++] = instr;
                 instr.code = LW;
                 instr.first_op = code_instr[curCode - 1].first_op;
@@ -341,7 +359,7 @@ ValueEntry* pop()
             break;
         case TCall2:
             instr.code = JAL;
-            instr.first_op = op_stack[op_sp].value.pointer;
+            instr.first_op = (int)(char*)op_stack[op_sp].value.pointer;
             code_instr[curCode++] = instr;
             ret = &all_values[all_values_sp++];
             ret->emplacement = OTHER;
@@ -741,6 +759,65 @@ void process_declaration(int old_val_sp)
                     break;
                 }
                 case 1:
+                {
+                    DataEntry data;
+                    Value temp;
+                    ValueEntry *val = &all_values[all_values_sp++];
+                    int size;
+                    data.value.pointer = NULL;
+                    process_expression();
+                    temp = eval_static();
+                    size = temp.integer;
+                    if(initref)
+                    {
+                        int i;
+                        Value *buffer;
+                        buffer = malloc(size * sizeof(Value));
+                        for(i = 0; i < size; ++i)
+                        {
+                            process_expression();
+                            temp = eval_static();
+                            buffer[i] = temp;
+                        }
+                        data.value.pointer = buffer;
+                        if(level)
+                        {
+                            for(i = 0; i < size; ++i)
+                            {
+                                Instruction instr;
+                                instr.code = ADDIU;
+                                instr.first_op = $t0;
+                                instr.second_op = $0;
+                                instr.third_op = buffer[i].integer;
+                                code_instr[curCode++] = instr;
+                                instr.code = SW;
+                                instr.first_op = $t0;
+                                instr.second_op = $sp;
+                                instr.third_op = -(val_sp + i - old_val_sp) * 4;
+                                code_instr[curCode++] = instr;
+                            }
+                        }
+                    }
+                    data.size = size;
+                    data.type = ROWOFINT;
+                    data.name = name_from_identref(identref);
+                    if(level)
+                    {
+                        val->emplacement = STACK;
+                        val->value.integer = op_sp;
+                        op_sp += size;
+                    }
+                    else
+                    {
+                        val->emplacement = MEM;
+                        val->value.pointer = data.name;
+                        data_entries[curData++] = data;
+                    }
+                    mips_identref[identref] = val;
+                    declarations[identref] = &all_values[all_values_sp++];
+                    declarations[identref]->emplacement = val->emplacement;
+                    declarations[identref]->value = val->value;
+                }
                     break;
                 default:
                     break;
