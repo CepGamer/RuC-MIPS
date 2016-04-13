@@ -20,7 +20,7 @@ typedef enum
 typedef enum
 {
     LABEL,
-    //  переходы
+    /* переходы */
     J,
     JR,
     JAL,
@@ -29,15 +29,15 @@ typedef enum
     LA_,
     LW,
     SW,
-    //  унарные операции
+    /* унарные операции */
     NEGU,
-    //  бинарные операции
+    /* бинарные операции */
     ADD,
     ADDU,
     ADDI,
     ADDIU,
     SLL,
-    //  сравнение
+    /* сравнение */
     SLT,
     SGT,
     MOVE,
@@ -46,13 +46,13 @@ typedef enum
 
 typedef enum
 {
-    SAVED,
-    TEMP,
-    STACK,
-    MEM,
-    STATIC,
-    GARBAGE,
-    OTHER
+    SAVED,      /* сохранённый регистр */
+    TEMP,       /* временный регистр */
+    STACK,      /* стэк */
+    MEM,        /* память */
+    STATIC,     /* значение известно на этапе компиляции */
+    GARBAGE,    /* мусор */
+    OTHER       /* прочее */
 } Emplacement;
 
 typedef enum
@@ -75,7 +75,7 @@ typedef struct
     int size;
     Value value;
     int flags;
-} DataEntry;
+} IdentEntry;
 
 typedef struct
 {
