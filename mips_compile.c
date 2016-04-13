@@ -25,11 +25,23 @@ ValueEntry* mips_identref[10000] = {0};
 ValueEntry* declarations[10000] = {0};
 int op_sp, val_sp, all_values_sp;
 
-DataEntry data_entries[1000];
+char temp_name[100];
+
+IdentEntry data_entries[1000];
 Instruction initialise_instr[1000], code_instr[10000];
 
 int curTree, curData, curInit, curCode;
 int level;
+
+Instruction create_instr(Instructions code, int first_op, int second_op, int third_op)
+{
+    Instruction ret;
+    ret.code = code;
+    ret.first_op = first_op;
+    ret.second_op = second_op;
+    ret.third_op = third_op;
+    return ret;
+}
 
 char * name_from_identref(int identref)
 {
@@ -98,6 +110,12 @@ char * reg_to_string(Registers reg)
     }
 }
 
+void fill_temp_name(int *pointer)
+{
+    int i = 0;
+    while(temp_name[i++] = *pointer++);
+}
+
 void write_instr(Instruction instr)
 {
     switch (instr.code) {
@@ -109,10 +127,14 @@ void write_instr(Instruction instr)
             fprintf(output, "\nnop\n");
         }
         else
-            fprintf(output, "j\t%s\nnop\n", (char *)instr.first_op);
+        {
+            fill_temp_name(instr.first_op);
+            fprintf(output, "j\t%s\nnop\n", temp_name);
+        }
         break;
     case JAL:
-        fprintf(output, "jal\t%s\nnop\n", (char *)instr.first_op);
+        fill_temp_name(instr.first_op);
+        fprintf(output, "jal\t%s\nnop\n", temp_name);
         break;
     case JR:
         fprintf(output, "jr\t%s\nnop\n", reg_to_string(instr.first_op));
@@ -136,7 +158,10 @@ void write_instr(Instruction instr)
             fprintf(output, ":\n");
         }
         else
-            fprintf(output, "%s:\n", (char *)instr.first_op);
+        {
+            fill_temp_name(instr.first_op);
+            fprintf(output, "%s:\n", temp_name);
+        }
         break;
     case ADDI:
         fprintf(output, "addi\t%s,%s,%d\n"
@@ -196,9 +221,10 @@ void write_instr(Instruction instr)
                 , instr.second_op);
         break;
     case LA_:
+        fill_temp_name(instr.second_op);
         fprintf(output, "la\t%s,%s\n"
                 , reg_to_string(instr.first_op)
-                , (char*)instr.second_op);
+                , temp_name);
         break;
     case LW:
         fprintf(output, "lw\t%s,%d(%s)\n"
@@ -220,7 +246,7 @@ void write_instr(Instruction instr)
     }
 }
 
-void write_data(DataEntry data)
+void write_data(IdentEntry data)
 {
     fprintf(output, "%s:\t", data.name);
     switch(data.type)
@@ -366,7 +392,10 @@ ValueEntry* pop()
             ret->emplacement = STATIC;
             break;
         case TIdenttoval:
-            ret = mips_identref[op_stack[op_sp].value.integer];
+            if(mips_identref[op_stack[op_sp].value.integer])
+                ret = mips_identref[op_stack[op_sp].value.integer];
+            else
+                ret = &all_values[all_values_sp++];
             ret->emplacement = declarations[op_stack[op_sp].value.integer]->emplacement;
             ret->value = declarations[op_stack[op_sp].value.integer]->value;
             load_value(ret);
@@ -517,7 +546,7 @@ ValueEntry *eval_dynamic()
                 code_instr[curCode++] = instr;
                 if(val_sp)
                 {
-                    instr.code = ADDI;
+                    instr.code = ADDIU;
                     instr.first_op = $sp;
                     instr.second_op = $sp;
                     instr.third_op = val_sp * 4;
@@ -817,7 +846,7 @@ void process_declaration(int old_val_sp)
             {
                 case 0:
                 {
-                    DataEntry data;
+                    IdentEntry data;
                     ValueEntry *val = &all_values[all_values_sp++];
                     if(initref)
                     {
@@ -859,7 +888,7 @@ void process_declaration(int old_val_sp)
                 }
                 case 1:
                 {
-                    DataEntry data;
+                    IdentEntry data;
                     Value temp;
                     ValueEntry *val = &all_values[all_values_sp++];
                     int size;
@@ -1024,7 +1053,6 @@ void process_expression()
             oper.value.integer = tree[curTree++];
             op_stack[op_sp++] = oper;
             return;
-            break;
         case TReturn:
             oper.code = TReturn;
             op_stack[op_sp++] = oper;
