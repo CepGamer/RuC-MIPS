@@ -317,7 +317,6 @@ void load_value(ValueEntry *val)
 {
     int i;
     static int nxt = 0;
-    Instruction instr;
     if(val->emplacement == TEMP || val->emplacement == SAVED)
         return;
     for(i = 0; i < temp_regs_count; ++i)
@@ -329,35 +328,18 @@ void load_value(ValueEntry *val)
             switch(val->emplacement)
             {
             case STATIC:
-                instr.code = ADDIU;
-                instr.first_op = val_to_reg(&t);
-                instr.second_op = $0;
-                instr.third_op = val->value.integer;
-                code_instr[curCode++] = instr;
+                code_instr[curCode++] = create_instr(ADDIU, val_to_reg(&t), $0, val->value.integer);
                 break;
             case MEM:
-                instr.code = LA_;
-                instr.first_op = val_to_reg(&t);
-                instr.second_op = (int)(char*)val->value.pointer;
-                code_instr[curCode++] = instr;
-                instr.code = LW;
-                instr.first_op = code_instr[curCode - 1].first_op;
-                instr.second_op = code_instr[curCode - 1].first_op;
-                instr.third_op = 0;
-                code_instr[curCode++] = instr;
+                code_instr[curCode++] = create_instr(LA_, val_to_reg(&t), (int)(char*)val->value.pointer, 0);
+                code_instr[curCode++] = create_instr(LW, code_instr[curCode - 1].first_op
+                                                       , code_instr[curCode - 1].first_op, 0);
                 break;
             case OTHER:
-                instr.code = MOVE;
-                instr.first_op = val_to_reg(&t);
-                instr.second_op = val_to_reg(val);
-                code_instr[curCode++] = instr;
+                code_instr[curCode++] = create_instr(MOVE, val_to_reg(&t), val_to_reg(val), 0);
                 break;
             case STACK:
-                instr.code = LW;
-                instr.first_op = val_to_reg(&t);
-                instr.second_op = $sp;
-                instr.third_op = (val_sp - val->value.integer) * 4;
-                code_instr[curCode++] = instr;
+                code_instr[curCode++] = create_instr(LW, val_to_reg(&t), $sp, (val_sp - val->value.integer) * 4);
                 break;
             default:
                 break;
@@ -381,7 +363,6 @@ void load_value(ValueEntry *val)
 ValueEntry* pop()
 {
     ValueEntry* ret;
-    Instruction instr;
     int c;
     if(op_sp--)
         switch (c = op_stack[op_sp].code)
@@ -410,23 +391,12 @@ ValueEntry* pop()
             ret->emplacement = GARBAGE;
             load_value(ret);
             if(declarations[identref]->emplacement == MEM)
-            {
-                instr.code = LA_;
-                instr.first_op = val_to_reg(ret);
-                instr.second_op = name_from_identref(identref);
-                code_instr[curCode++] = instr;
-            }
+                code_instr[curCode++] = create_instr(LA_, val_to_reg(ret), name_from_identref(identref), 0);
             else
             {
-                instr.code = MOVE;
-                instr.first_op = val_to_reg(ret);
-                instr.second_op = $sp;
-                code_instr[curCode++] = instr;
-                instr.code = ADDIU;
-                instr.first_op = val_to_reg(ret);
-                instr.second_op = val_to_reg(ret);
-                instr.third_op = (val_sp - declarations[identref]->value.integer) * 4;
-                code_instr[curCode++] = instr;
+                code_instr[curCode++] = create_instr(MOVE, val_to_reg(ret), $sp, 0);
+                code_instr[curCode++] = create_instr(ADDIU, val_to_reg(ret), val_to_reg(ret)
+                                                     , (val_sp - declarations[identref]->value.integer) * 4);
             }
         }
             break;
@@ -437,31 +407,14 @@ ValueEntry* pop()
             ret = pop();
             load_value(tmp);
             load_value(ret);
-            instr.code = SLL;
-            instr.first_op = val_to_reg(tmp);
-            instr.second_op = instr.first_op;
-            instr.third_op = 2;
-            code_instr[curCode++] = instr;
-            instr.code = NEGU;
-            instr.first_op = val_to_reg(tmp);
-            instr.second_op = instr.first_op;
-            code_instr[curCode++] = instr;
-            instr.code = ADDU;
-            instr.first_op = val_to_reg(ret);
-            instr.second_op = instr.first_op;
-            instr.third_op = val_to_reg(tmp);
-            code_instr[curCode++] = instr;
-            instr.code = LW;
-            instr.first_op = val_to_reg(ret);
-            instr.second_op = instr.first_op;
-            instr.third_op = 0;
-            code_instr[curCode++] = instr;
+            code_instr[curCode++] = create_instr(SLL, val_to_reg(tmp), val_to_reg(tmp), 2);
+            code_instr[curCode++] = create_instr(NEGU, val_to_reg(tmp), val_to_reg(tmp), 0);
+            code_instr[curCode++] = create_instr(ADDU, val_to_reg(ret), val_to_reg(ret), val_to_reg(tmp));
+            code_instr[curCode++] = create_instr(LW, val_to_reg(ret), val_to_reg(ret), 0);
         }
             break;
         case TCall2:
-            instr.code = JAL;
-            instr.first_op = (int)(char*)op_stack[op_sp].value.pointer;
-            code_instr[curCode++] = instr;
+            code_instr[curCode++] = create_instr(JAL, (int)(char*)op_stack[op_sp].value.pointer, 0, 0);
             ret = &all_values[all_values_sp++];
             ret->emplacement = OTHER;
             ret->value.integer = $v0;
@@ -497,7 +450,6 @@ ValueEntry* pop()
 
 ValueEntry *eval_dynamic()
 {
-    Instruction instr;
     static ValueEntry *prev;
     while(op_sp--)
     {
@@ -527,34 +479,17 @@ ValueEntry *eval_dynamic()
             switch (c)
             {
             case TReturnval:
-                instr.code = MOVE;
-                instr.first_op = $v0;
-                instr.second_op = val_to_reg(prev);
-                code_instr[curCode++] = instr;
+                code_instr[curCode++] = create_instr(MOVE, $v0, val_to_reg(prev), 0);
             case TReturn:
                 //  Возврат адреса окна функции
-                instr.code = LW;
-                instr.first_op = $fp;
-                instr.second_op = $sp;
-                instr.third_op = val_sp * 4;
-                code_instr[curCode++] = instr;
+                code_instr[curCode++] = create_instr(LW, $fp, $sp, val_sp * 4);
                 //  Возврат адреса возврата
-                instr.code = LW;
-                instr.first_op = $ra;
-                instr.second_op = $sp;
-                instr.third_op = (val_sp - 1) * 4;
-                code_instr[curCode++] = instr;
+                code_instr[curCode++] = create_instr(LW, $ra, $sp, (val_sp - 1) * 4);
                 if(val_sp)
                 {
-                    instr.code = ADDIU;
-                    instr.first_op = $sp;
-                    instr.second_op = $sp;
-                    instr.third_op = val_sp * 4;
-                    code_instr[curCode++] = instr;
+                    code_instr[curCode++] = create_instr(ADDIU, $sp, $sp, val_sp * 4);
                 }
-                instr.code = JR;
-                instr.first_op = $ra;
-                code_instr[curCode++] = instr;
+                code_instr[curCode++] = create_instr(JR, $ra, 0, 0);
                 break;
             case TPrint:
                 switch (op_stack[op_sp].value.integer)
@@ -562,16 +497,9 @@ ValueEntry *eval_dynamic()
                 case LINT:
                     prev = pop();
                     load_value(prev);
-                    instr.code = LI_;
-                    instr.first_op = $v0;
-                    instr.second_op = 1;
-                    code_instr[curCode++] = instr;
-                    instr.code = MOVE;
-                    instr.first_op = $a0;
-                    instr.second_op = val_to_reg(prev);
-                    code_instr[curCode++] = instr;
-                    instr.code = SYSCALL;
-                    code_instr[curCode++] = instr;
+                    code_instr[curCode++] = create_instr(LI_, $v0, 1, 0);
+                    code_instr[curCode++] = create_instr(MOVE, $a0, val_to_reg(prev), 0);
+                    code_instr[curCode++] = create_instr(SYSCALL, 0, 0, 0);
                     break;
                 default:
                     break;
@@ -589,31 +517,19 @@ ValueEntry *eval_dynamic()
 
 void assign_to_ValueEntry(ValueEntry *to_ass, ValueEntry *new_val)
 {
-    Instruction instr;
     if(to_ass->emplacement == MEM)
     {
         ValueEntry *c = &all_values[all_values_sp++];
         c->emplacement = GARBAGE;
         load_value(c);
-        instr.code = LA_;
-        instr.first_op = val_to_reg(c);
-        instr.second_op = (char*)to_ass->value.pointer;
-        code_instr[curCode++] = instr;
+        code_instr[curCode++] = create_instr(LA_, val_to_reg(c), (char*)to_ass->value.pointer, 0);
         load_value(new_val);
-        instr.code = SW;
-        instr.first_op = val_to_reg(new_val);
-        instr.second_op = val_to_reg(c);
-        instr.third_op = 0;
-        code_instr[curCode++] = instr;
+        code_instr[curCode++] = create_instr(SW, val_to_reg(new_val), val_to_reg(c), 0);
     }
     else if (to_ass->emplacement == STACK)
     {
         load_value(new_val);
-        instr.code = SW;
-        instr.first_op = val_to_reg(new_val);
-        instr.second_op = $sp;
-        instr.third_op = (val_sp - to_ass->value.integer) * 4;
-        code_instr[curCode++] = instr;
+        code_instr[curCode++] = create_instr(SW, val_to_reg(new_val), $sp, (val_sp - to_ass->value.integer) * 4);
     }
 }
 
@@ -642,7 +558,6 @@ ValueEntry *process_assign(int code)
         (code >= POSTINCRV && code <= DECRV))
     {
         ValueEntry *a = pop(), *b;
-        Instruction instr;
         b = &all_values[all_values_sp++];
         b->emplacement = a->emplacement;
         b->value = a->value;
@@ -650,20 +565,12 @@ ValueEntry *process_assign(int code)
         switch (code) {
         case INCV:
         case POSTINCV:
-            instr.code = ADDIU;
-            instr.first_op = val_to_reg(b);
-            instr.second_op = val_to_reg(b);
-            instr.third_op = 1;
-            code_instr[curCode++] = instr;
+            code_instr[curCode++] = create_instr(ADDIU, val_to_reg(b), val_to_reg(b), 1);
             assign_to_ValueEntry(a, b);
             break;
         case DECV:
         case POSTDECV:
-            instr.code = ADDIU;
-            instr.first_op = val_to_reg(b);
-            instr.second_op = val_to_reg(b);
-            instr.third_op = -1;
-            code_instr[curCode++] = instr;
+            code_instr[curCode++] = create_instr(ADDIU, val_to_reg(b), val_to_reg(b), -1);
             assign_to_ValueEntry(a, b);
             break;
         default:
@@ -675,27 +582,18 @@ ValueEntry *process_assign(int code)
 ValueEntry *process_assign_at(int code)
 {
     ValueEntry *a, *b, *ret;
-    Instruction instr;
     a = pop();
     b = pop();
     load_value(a);
     load_value(b);
-    instr.code = ADDU;
-    instr.first_op = val_to_reg(a);
-    instr.second_op = instr.first_op;
-    instr.third_op = val_to_reg(b);
-    code_instr[curCode++] = instr;
+    code_instr[curCode++] = create_instr(ADDU, val_to_reg(a), val_to_reg(a), val_to_reg(b));
     b = pop();
     load_value(b);
     switch (code)
     {
     case ASSAT:
     case ASSATV:
-        instr.code = SW;
-        instr.first_op = val_to_reg(a);
-        instr.second_op = val_to_reg(b);
-        instr.third_op = 0;
-        code_instr[curCode++] = instr;
+        code_instr[curCode++] = create_instr(SW, val_to_reg(a), val_to_reg(b), 0);
         ret = b;
         break;
     default:
@@ -707,7 +605,6 @@ ValueEntry *process_assign_at(int code)
 ValueEntry *process_binop(int code)
 {
     ValueEntry *a, *b, *ret;
-    Instruction instr;
     a = pop();
     b = pop();
     load_value(a);
@@ -715,26 +612,17 @@ ValueEntry *process_binop(int code)
     switch (code)
     {
     case LPLUS:
-        instr.code = ADD;
-        instr.first_op = instr.third_op = val_to_reg(a);
-        instr.second_op = val_to_reg(b);
-        code_instr[curCode++] = instr;
+        code_instr[curCode++] = create_instr(ADDU, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         b->emplacement = GARBAGE;
         ret = a;
         break;
     case LLT:
-        instr.code = SLT;
-        instr.first_op = instr.third_op = val_to_reg(a);
-        instr.second_op = val_to_reg(b);
-        code_instr[curCode++] = instr;
+        code_instr[curCode++] = create_instr(SLT, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         b->emplacement = GARBAGE;
         ret = a;
         break;
     case LGT:
-        instr.code = SGT;
-        instr.first_op = instr.third_op = val_to_reg(a);
-        instr.second_op = val_to_reg(b);
-        code_instr[curCode++] = instr;
+        code_instr[curCode++] = create_instr(SGT, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         b->emplacement = GARBAGE;
         ret = a;
         break;
@@ -747,54 +635,28 @@ void process_for()
     int cond_label = curTempLabel++, incr_label = curTempLabel++, body_label = curTempLabel++, exit_label = curTempLabel++;
     curTree += 4;
     ValueEntry *tmp;
-    Instruction instr;
     //  инициализация
     process_expression();
     eval_dynamic();
     //  проверка условия
-    instr.code = LABEL;
-    instr.first_op = -1;
-    instr.second_op = cond_label;
-    code_instr[curCode++] = instr;
+    code_instr[curCode++] = create_instr(LABEL, -1, cond_label, 0);
     process_expression();
     tmp = eval_dynamic();
     load_value(tmp);
-    instr.code = BEQZ;
-    instr.first_op = val_to_reg(tmp);
-    instr.second_op = -1;
-    instr.third_op = exit_label;
-    code_instr[curCode++] = instr;
-    instr.code = J;
-    instr.first_op = -1;
-    instr.second_op = body_label;
-    code_instr[curCode++] = instr;
+    code_instr[curCode++] = create_instr(BEQZ, val_to_reg(tmp), -1, exit_label);
+    code_instr[curCode++] = create_instr(J, -1, body_label, 0);
     //  инкремент
-    instr.code = LABEL;
-    instr.first_op = -1;
-    instr.second_op = incr_label;
-    code_instr[curCode++] = instr;
+    code_instr[curCode++] = create_instr(LABEL, -1, incr_label, 0);
     process_expression();
     eval_dynamic();
-    instr.code = J;
-    instr.first_op = -1;
-    instr.second_op = cond_label;
-    code_instr[curCode++] = instr;
+    code_instr[curCode++] = create_instr(J, -1, cond_label, 0);
     //  Тело цикла
-    instr.code = LABEL;
-    instr.first_op = -1;
-    instr.second_op = body_label;
-    code_instr[curCode++] = instr;
+    code_instr[curCode++] = create_instr(LABEL, -1, body_label, 0);
     process_block();
 
-    instr.code = J;
-    instr.first_op = -1;
-    instr.second_op = incr_label;
-    code_instr[curCode++] = instr;
+    code_instr[curCode++] = create_instr(J, -1, incr_label, 0);
     //  Выход из цикла
-    instr.code = LABEL;
-    instr.first_op = -1;
-    instr.second_op = exit_label;
-    code_instr[curCode++] = instr;
+    code_instr[curCode++] = create_instr(LABEL, -1, exit_label, 0);
 }
 
 void process_if()
@@ -802,32 +664,21 @@ void process_if()
     int else_ref = tree[++curTree];
     int else_label = curTempLabel++, exit_label = curTempLabel++;
     ValueEntry *cond;
-    Instruction instr;
     ++curTree;
     //  условие
     process_expression();
     cond = eval_dynamic();
     load_value(cond);
-    instr.code = BEQZ;
-    instr.first_op = val_to_reg(cond);
-    instr.second_op = -1;
-    instr.third_op = else_ref ? else_label : exit_label;
-    code_instr[curCode++] = instr;
+    code_instr[curCode++] = create_instr(BEQZ, val_to_reg(cond), -1, else_ref ? else_label : exit_label);
     //  если условие выполнено
     process_block();
     //  иначе
     if(else_ref)
     {
-        instr.code = LABEL;
-        instr.first_op = -1;
-        instr.second_op = else_label;
-        code_instr[curCode++] = instr;
+        code_instr[curCode++] = create_instr(LABEL, -1, else_label, 0);
         process_block();
     }
-    instr.code = LABEL;
-    instr.first_op = -1;
-    instr.second_op = exit_label;
-    code_instr[curCode++] = instr;
+    code_instr[curCode++] = create_instr(LABEL, -1, exit_label, 0);
 }
 
 void process_while()
@@ -859,17 +710,8 @@ void process_declaration(int old_val_sp)
                     {
                         if (initref)
                         {
-                            Instruction instr;
-                            instr.code = ADDIU;
-                            instr.first_op = $t0;
-                            instr.second_op = $0;
-                            instr.third_op = data.value.integer;
-                            code_instr[curCode++] = instr;
-                            instr.code = SW;
-                            instr.first_op = $t0;
-                            instr.second_op = $sp;
-                            instr.third_op = -(val_sp - old_val_sp) * 4;
-                            code_instr[curCode++] = instr;
+                            code_instr[curCode++] = create_instr(ADDIU, $t0, $0, data.value.integer);
+                            code_instr[curCode++] = create_instr(SW, $t0, $sp, -(val_sp - old_val_sp) * 4);
                         }
                         val->emplacement = STACK;
                         val->value.integer = val_sp++;
@@ -912,17 +754,8 @@ void process_declaration(int old_val_sp)
                         {
                             for(i = 0; i < size; ++i)
                             {
-                                Instruction instr;
-                                instr.code = ADDIU;
-                                instr.first_op = $t0;
-                                instr.second_op = $0;
-                                instr.third_op = buffer[i].integer;
-                                code_instr[curCode++] = instr;
-                                instr.code = SW;
-                                instr.first_op = $t0;
-                                instr.second_op = $sp;
-                                instr.third_op = -(val_sp + i - old_val_sp) * 4;
-                                code_instr[curCode++] = instr;
+                                code_instr[curCode++] = create_instr(ADDIU, $t0, $0, buffer[i].integer);
+                                code_instr[curCode++] = create_instr(SW, $t0, $sp, -(val_sp + i - old_val_sp) * 4);
                             }
                         }
                     }
@@ -967,10 +800,7 @@ void process_declaration(int old_val_sp)
 void process_function()
 {
     int identref = tree[curTree++], maxdisp = tree[curTree++];
-    Instruction tmp;
-    tmp.code = LABEL;
-    tmp.first_op = name_from_identref(identref);
-    code_instr[curCode++] = tmp;
+    code_instr[curCode++] = create_instr(LABEL, name_from_identref(identref), 0, 0);
     curTree++;
     val_sp += 2;
 
@@ -979,26 +809,11 @@ void process_function()
         process_declaration(0);
 
     //  Сохранение указателя на окно функции и адреса возврата
-    tmp.code = ADDIU;
-    tmp.first_op = $sp;
-    tmp.second_op = $sp;
-    tmp.third_op = -val_sp * 4;
-    code_instr[curCode++] = tmp;
-    tmp.code = SW;
-    tmp.first_op = $fp;
-    tmp.second_op = $sp;
-    tmp.third_op = val_sp * 4;
-    code_instr[curCode++] = tmp;
-    tmp.code = SW;
-    tmp.first_op = $ra;
-    tmp.second_op = $sp;
-    tmp.third_op = (val_sp - 1) * 4;
-    code_instr[curCode++] = tmp;
+    code_instr[curCode++] = create_instr(ADDIU, $sp, $sp, -val_sp * 4);
+    code_instr[curCode++] = create_instr(SW, $fp, $sp, val_sp * 4);
+    code_instr[curCode++] = create_instr(SW, $ra, $sp, (val_sp - 1) * 4);
     //  Запись адреса нового окна функции
-    tmp.code = MOVE;
-    tmp.first_op = $fp;
-    tmp.second_op = $sp;
-    code_instr[curCode++] = tmp;
+    code_instr[curCode++] = create_instr(MOVE, $fp, $sp, 0);
 
     //  Выражения
     while (tree[curTree] != TEnd)
@@ -1101,7 +916,6 @@ void process_expression()
 void process_block()
 {
     int old_val_sp = val_sp;
-    Instruction instr;
     if(tree[curTree] == TBegin)
     {
         ++curTree;
@@ -1109,13 +923,7 @@ void process_block()
             process_declaration(old_val_sp);
         //  рост стека
         if(val_sp != old_val_sp)
-        {
-            instr.code = ADDIU;
-            instr.first_op = $sp;
-            instr.second_op = $sp;
-            instr.third_op = -(val_sp - old_val_sp) * 4;
-            code_instr[curCode++] = instr;
-        }
+            code_instr[curCode++] = create_instr(ADDIU, $sp, $sp, -(val_sp - old_val_sp) * 4);
         while (tree[curTree] != TEnd)
         {
             process_expression();
@@ -1129,11 +937,7 @@ void process_block()
     }
     if(val_sp != old_val_sp)
     {
-        instr.code = ADDIU;
-        instr.first_op = $sp;
-        instr.second_op = $sp;
-        instr.third_op = (val_sp - old_val_sp) * 4;
-        code_instr[curCode++] = instr;
+        code_instr[curCode++] = create_instr(ADDIU, $sp, $sp, (val_sp - old_val_sp) * 4);
         val_sp = old_val_sp;
     }
 }
@@ -1141,7 +945,6 @@ void process_block()
 void compile_mips()
 {
     int i;
-    Instruction gotomain;
     out_mips = fopen(outfile, "w");
     curTree = curData = curInit = curCode = 0;
     curTempLabel = 0;
@@ -1161,9 +964,7 @@ void compile_mips()
     fprintf(output, ".text\n");
     for(i = 0; i < curInit; i++)
         write_instr(initialise_instr[i]);
-    gotomain.code = J;
-    gotomain.first_op = name_from_identref(0);
-    write_instr(gotomain);
+    write_instr(create_instr(J, name_from_identref(0), 0, 0));
     for(i = 0; i < curCode; i++)
         write_instr(code_instr[i]);
 
