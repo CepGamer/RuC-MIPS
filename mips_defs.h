@@ -1,5 +1,7 @@
+//  RuC2
 //
-// Created by mainuser on 05.03.16.
+//  Created by BSergei Bolotov on 05/Mar/2016.
+//  Copyright (c) 2016 Sergei Bolotov. All rights reserved.
 //
 
 #ifndef RUC2_MIPS_DEFS_H
@@ -20,6 +22,7 @@ typedef enum
 typedef enum
 {
     LABEL,
+    DELETED,
     /* переходы */
     J,
     JR,
@@ -32,11 +35,27 @@ typedef enum
     /* унарные операции */
     NEGU,
     /* бинарные операции */
+    /* арифметические */
     ADD,
     ADDU,
+    SUB,
+    SUBU,
     ADDI,
     ADDIU,
+
+    /* умножение и деление */
+    MUL,
+    DIV,
+    REM,
+
+    /* логические */
+    OR,
+    XOR,
+    AND,
     SLL,
+    SLLV,
+    SRA,
+    SRAV,
     /* сравнение */
     SLT,
     SGT,

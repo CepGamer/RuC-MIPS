@@ -32,6 +32,9 @@ Instruction initialise_instr[1000], code_instr[10000];
 
 int curTree, curData, curInit, curCode;
 int level;
+int had_func_call;
+int delayed_slot = 1;
+int fp_code;
 
 Instruction create_instr(Instructions code, int first_op, int second_op, int third_op)
 {
@@ -163,18 +166,6 @@ void write_instr(Instruction instr)
             fprintf(output, "%s:\n", temp_name);
         }
         break;
-    case ADDI:
-        fprintf(output, "addi\t%s,%s,%d\n"
-                , reg_to_string(instr.first_op)
-                , reg_to_string(instr.second_op)
-                , instr.third_op);
-        break;
-    case ADDIU:
-        fprintf(output, "addiu\t%s,%s,%d\n"
-                , reg_to_string(instr.first_op)
-                , reg_to_string(instr.second_op)
-                , instr.third_op);
-        break;
     case ADD:
         fprintf(output, "add\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
@@ -187,11 +178,93 @@ void write_instr(Instruction instr)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
+    case SUB:
+        fprintf(output, "sub\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        break;
+    case SUBU:
+        fprintf(output, "subu\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        break;
+    case ADDI:
+        fprintf(output, "addi\t%s,%s,%d\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , instr.third_op);
+        break;
+    case ADDIU:
+        fprintf(output, "addiu\t%s,%s,%d\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , instr.third_op);
+        break;
+    case MUL:
+        fprintf(output, "mul\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        break;
+    case DIV:
+    case REM:
+        fprintf(output, "div\t%s,%s,%s\n"
+                , reg_to_string($0)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        fprintf(output, "teq\t%s,%s\n"
+                , reg_to_string(instr.third_op)
+                , reg_to_string($0));
+        if(instr.code == REM)
+            fprintf(output, "mfhi\t%s\n"
+                    , reg_to_string(instr.first_op));
+        else
+            fprintf(output, "mflo\t%s\n"
+                    , reg_to_string(instr.first_op));
+        break;
+    case OR:
+        fprintf(output, "or\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        break;
+    case XOR:
+        fprintf(output, "xor\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        break;
+    case AND:
+        fprintf(output, "and\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        break;
     case SLL:
         fprintf(output, "sll\t%s,%s,%d\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , instr.third_op);
+        break;
+    case SLLV:
+        fprintf(output, "sllv\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        break;
+    case SRA:
+        fprintf(output, "sra\t%s,%s,%d\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , instr.third_op);
+        break;
+    case SRAV:
+        fprintf(output, "srav\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
         break;
     case SLT:
         fprintf(output, "slt\t%s,%s,%s\n"
@@ -248,7 +321,8 @@ void write_instr(Instruction instr)
 
 void write_data(IdentEntry data)
 {
-    fprintf(output, "%s:\t", data.name);
+    fill_temp_name(data.name);
+    fprintf(output, "%s:\t", temp_name);
     switch(data.type)
     {
     int i;
@@ -315,11 +389,13 @@ Value eval_static()
 
 void load_value(ValueEntry *val)
 {
-    int i;
+    int i = 0;
     static int nxt = 0;
     if(val->emplacement == TEMP || val->emplacement == SAVED)
         return;
-    for(i = 0; i < temp_regs_count; ++i)
+
+cycle:
+    for(i; i < temp_regs_count; ++i)
         if(!temp_regs[i] || temp_regs[i]->emplacement != TEMP)
         {
             ValueEntry t;
@@ -332,8 +408,8 @@ void load_value(ValueEntry *val)
                 break;
             case MEM:
                 code_instr[curCode++] = create_instr(LA_, val_to_reg(&t), (int)(char*)val->value.pointer, 0);
-                code_instr[curCode++] = create_instr(LW, code_instr[curCode - 1].first_op
-                                                       , code_instr[curCode - 1].first_op, 0);
+                code_instr[curCode++] = create_instr(LW, val_to_reg(&t)
+                                                       , val_to_reg(&t), 0);
                 break;
             case OTHER:
                 code_instr[curCode++] = create_instr(MOVE, val_to_reg(&t), val_to_reg(val), 0);
@@ -349,15 +425,9 @@ void load_value(ValueEntry *val)
             temp_regs[i] = val;
             return;
         }
-    temp_regs[nxt]->emplacement = STACK;
-    temp_regs[nxt]->value.integer = val_sp;
-    //  TODO
-    //  Add instruction
-//    instr.code =
-    val_stack[val_sp++] = temp_regs[nxt];
-    val->emplacement = TEMP;
-    val->value.integer = nxt;
-    temp_regs[nxt++] = val;
+    nxt %= 10;
+    temp_regs[i = nxt++]->emplacement = GARBAGE;
+    goto cycle;
 }
 
 ValueEntry* pop()
@@ -415,6 +485,7 @@ ValueEntry* pop()
             break;
         case TCall2:
             code_instr[curCode++] = create_instr(JAL, (int)(char*)op_stack[op_sp].value.pointer, 0, 0);
+            had_func_call = 1;
             ret = &all_values[all_values_sp++];
             ret->emplacement = OTHER;
             ret->value.integer = $v0;
@@ -482,13 +553,14 @@ ValueEntry *eval_dynamic()
                 code_instr[curCode++] = create_instr(MOVE, $v0, val_to_reg(prev), 0);
             case TReturn:
                 //  Возврат адреса окна функции
-                code_instr[curCode++] = create_instr(LW, $fp, $sp, val_sp * 4);
+                code_instr[fp_code = curCode++] = create_instr(LW, $fp, $sp, val_sp * 4);
                 //  Возврат адреса возврата
                 code_instr[curCode++] = create_instr(LW, $ra, $sp, (val_sp - 1) * 4);
-                if(val_sp)
-                {
-                    code_instr[curCode++] = create_instr(ADDIU, $sp, $sp, val_sp * 4);
-                }
+
+                /* сброс стека */
+                code_instr[curCode++] = create_instr(ADDIU, $sp, $sp, val_sp * 4);
+
+                /* возврат по регистру $ra */
                 code_instr[curCode++] = create_instr(JR, $ra, 0, 0);
                 break;
             case TPrint:
@@ -533,6 +605,16 @@ void assign_to_ValueEntry(ValueEntry *to_ass, ValueEntry *new_val)
     }
 }
 
+ValueEntry *copy_value_entry(ValueEntry *entry)
+{
+    ValueEntry *ret = &all_values[all_values_sp++];
+
+    ret->emplacement = entry->emplacement;
+    ret->value = entry->value;
+
+    return ret;
+}
+
 ValueEntry *process_assign(int code)
 {
     if ((code >= ASS && code <= DIVASS) ||
@@ -540,42 +622,109 @@ ValueEntry *process_assign(int code)
         (code >= ASSV && code <= DIVASSV) ||
         (code >= PLUSASSRV && code <= DIVASSRV))
     {
-        ValueEntry *a = pop(), *b = pop();
-        switch (code)
-        {
-        case ASS:
-        case ASSV:
+        ValueEntry *a = pop(), *b = pop(), *t;
+        if(code == ASS || code == ASSV)
             assign_to_ValueEntry(b, a);
-            return a;
-            break;
-        default:
-            break;
+        else
+        {
+            t = copy_value_entry(b);
+            load_value(t);
+            switch (code)
+            {
+            case REMASS:
+            case REMASSV:
+                code_instr[curCode++] = create_instr(REM, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                break;
+                break;
+            case SHLASS:
+            case SHLASSV:
+                code_instr[curCode++] = create_instr(SLLV, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                break;
+            case SHRASS:
+            case SHRASSV:
+                code_instr[curCode++] = create_instr(SRAV, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                break;
+            case ANDASS:
+            case ANDASSV:
+                code_instr[curCode++] = create_instr(AND, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                break;
+            case EXORASS:
+            case EXORASSV:
+                code_instr[curCode++] = create_instr(XOR, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                break;
+            case ORASS:
+            case ORASSV:
+                code_instr[curCode++] = create_instr(OR, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                break;
+            case PLUSASS:
+            case PLUSASSV:
+                code_instr[curCode++] = create_instr(ADDU, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                break;
+            case MINUSASS:
+            case MINUSASSV:
+                code_instr[curCode++] = create_instr(SUBU, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                break;
+            case MULTASS:
+            case MULTASSV:
+                code_instr[curCode++] = create_instr(MUL, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                break;
+            case DIVASS:
+            case DIVASSV:
+                code_instr[curCode++] = create_instr(DIV, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                break;
+            default:
+                break;
+            }
+            assign_to_ValueEntry(b, t);
+            a = t;
         }
+        return a;
     }
     else if((code >= POSTINC && code <= DEC) ||
         (code >= POSTINCV && code <= DECV) ||
         (code >= POSTINCR && code <= DECR) ||
         (code >= POSTINCRV && code <= DECRV))
     {
-        ValueEntry *a = pop(), *b;
-        b = &all_values[all_values_sp++];
-        b->emplacement = a->emplacement;
-        b->value = a->value;
+        ValueEntry *a = pop(), *b, *ret;
+        b = copy_value_entry(a);
         load_value(b);
-        switch (code) {
+        ret = b;
+        switch (code)
+        {
         case INCV:
         case POSTINCV:
+        case INC:
+        case POSTINC:
+            if(code == POSTINC)
+            {
+                ValueEntry *c = &all_values[all_values_sp++];
+                c->emplacement = GARBAGE;
+                load_value(c);
+                code_instr[curCode++] = create_instr(ADDIU, val_to_reg(c), val_to_reg(b), 0);
+                ret = c;
+            }
             code_instr[curCode++] = create_instr(ADDIU, val_to_reg(b), val_to_reg(b), 1);
             assign_to_ValueEntry(a, b);
             break;
         case DECV:
         case POSTDECV:
+        case DEC:
+        case POSTDEC:
+            if(code == POSTDEC)
+            {
+                ValueEntry *c = &all_values[all_values_sp++];
+                c->emplacement = GARBAGE;
+                load_value(c);
+                code_instr[curCode++] = create_instr(ADDIU, val_to_reg(c), val_to_reg(b), 0);
+                ret = c;
+            }
             code_instr[curCode++] = create_instr(ADDIU, val_to_reg(b), val_to_reg(b), -1);
             assign_to_ValueEntry(a, b);
             break;
         default:
             break;
         }
+        return ret;
     }
 }
 
@@ -613,20 +762,21 @@ ValueEntry *process_binop(int code)
     {
     case LPLUS:
         code_instr[curCode++] = create_instr(ADDU, val_to_reg(a), val_to_reg(b), val_to_reg(a));
-        b->emplacement = GARBAGE;
-        ret = a;
         break;
+    case LMINUS:
+    case LMULT:
+        code_instr[curCode++] = create_instr(MUL, val_to_reg(a), val_to_reg(b), val_to_reg(a));
+        break;
+    case LDIV:
     case LLT:
         code_instr[curCode++] = create_instr(SLT, val_to_reg(a), val_to_reg(b), val_to_reg(a));
-        b->emplacement = GARBAGE;
-        ret = a;
         break;
     case LGT:
         code_instr[curCode++] = create_instr(SGT, val_to_reg(a), val_to_reg(b), val_to_reg(a));
-        b->emplacement = GARBAGE;
-        ret = a;
         break;
     }
+    b->emplacement = GARBAGE;
+    ret = a;
     return ret;
 }
 
@@ -695,100 +845,110 @@ void process_declaration(int old_val_sp)
             int identref = tree[curTree++], initref = tree[curTree++], N = tree[curTree++];
             switch (N)
             {
-                case 0:
+            case 0:
+            {
+                IdentEntry data;
+                ValueEntry *val = &all_values[all_values_sp++];
+                if(initref)
                 {
-                    IdentEntry data;
-                    ValueEntry *val = &all_values[all_values_sp++];
-                    if(initref)
-                    {
-                        process_expression();
-                        data.value = eval_static();
-                    }
-                    data.name = name_from_identref(identref);
-                    data.type = LINT;
-                    if(level)
-                    {
-                        if (initref)
-                        {
-                            code_instr[curCode++] = create_instr(ADDIU, $t0, $0, data.value.integer);
-                            code_instr[curCode++] = create_instr(SW, $t0, $sp, -(val_sp - old_val_sp) * 4);
-                        }
-                        val->emplacement = STACK;
-                        val->value.integer = val_sp++;
-                    }
-                    else
-                    {
-                        val->emplacement = MEM;
-                        val->value.pointer = name_from_identref(identref);
-                        data_entries[curData++] = data;
-                    }
-                    mips_identref[identref] = val;
-                    declarations[identref] = &all_values[all_values_sp++];
-                    declarations[identref]->emplacement = val->emplacement;
-                    declarations[identref]->value = val->value;
-                    break;
+                    process_expression();
+                    data.value = eval_static();
                 }
-                case 1:
+                data.name = name_from_identref(identref);
+                data.type = LINT;
+                if(level)
                 {
-                    IdentEntry data;
-                    Value temp;
-                    ValueEntry *val = &all_values[all_values_sp++];
-                    int size;
-                    data.value.pointer = NULL;
+                    if (initref)
+                    {
+                        code_instr[curCode++] = create_instr(ADDIU, $t0, $0, data.value.integer);
+                        code_instr[curCode++] = create_instr(SW, $t0, $sp, (val_sp - old_val_sp + 1) * 4);
+                    }
+                    val->emplacement = STACK;
+                    val->value.integer = val_sp++;
+                }
+                else
+                {
+                    val->emplacement = MEM;
+                    val->value.pointer = name_from_identref(identref);
+                    data_entries[curData++] = data;
+                }
+                mips_identref[identref] = val;
+                declarations[identref] = &all_values[all_values_sp++];
+                declarations[identref]->emplacement = val->emplacement;
+                declarations[identref]->value = val->value;
+                break;
+            }
+            case 1:
+            case 2:
+            {
+                IdentEntry data;
+                Value temp;
+                ValueEntry *val = &all_values[all_values_sp++];
+                int size;
+                data.value.pointer = NULL;
+                process_expression();
+                temp = eval_static();
+                size = temp.integer;
+                if(N == 2)
+                {
                     process_expression();
                     temp = eval_static();
-                    size = temp.integer;
-                    if(initref)
+                    size *= temp.integer;
+                }
+                if(initref)
+                {
+                    int i;
+                    Value *buffer;
+                    buffer = malloc(size * sizeof(Value));
+                    for(i = 0; i < size; ++i)
                     {
-                        int i;
-                        Value *buffer;
-                        buffer = malloc(size * sizeof(Value));
-                        for(i = 0; i < size; ++i)
-                        {
-                            process_expression();
-                            temp = eval_static();
-                            buffer[i] = temp;
-                        }
-                        data.value.pointer = buffer;
-                        if(level)
-                        {
-                            for(i = 0; i < size; ++i)
-                            {
-                                code_instr[curCode++] = create_instr(ADDIU, $t0, $0, buffer[i].integer);
-                                code_instr[curCode++] = create_instr(SW, $t0, $sp, -(val_sp + i - old_val_sp) * 4);
-                            }
-                        }
+                        process_expression();
+                        temp = eval_static();
+                        buffer[i] = temp;
                     }
-                    data.size = size;
-                    data.type = ROWOFINT;
-                    data.name = name_from_identref(identref);
+                    data.value.pointer = buffer;
                     if(level)
                     {
-                        val->emplacement = STACK;
-                        val->value.integer = val_sp;
-                        val_sp += size;
+                        for(i = 0; i < size; ++i)
+                        {
+                            code_instr[curCode++] = create_instr(ADDIU, $t0, $0, buffer[i].integer);
+                            code_instr[curCode++] = create_instr(SW, $t0, $sp, (val_sp + i - old_val_sp + 1) * 4);
+                        }
                     }
-                    else
-                    {
-                        val->emplacement = MEM;
-                        val->value.pointer = data.name;
-                        data_entries[curData++] = data;
-                    }
-                    mips_identref[identref] = val;
-                    declarations[identref] = &all_values[all_values_sp++];
-                    declarations[identref]->emplacement = val->emplacement;
-                    declarations[identref]->value = val->value;
                 }
-                    break;
-                default:
-                    break;
+                data.size = size;
+                data.type = ROWOFINT;
+                data.name = name_from_identref(identref);
+                if(level)
+                {
+                    val->emplacement = STACK;
+                    val->value.integer = val_sp;
+                    val_sp += size;
+                }
+                else
+                {
+                    val->emplacement = MEM;
+                    val->value.pointer = data.name;
+                    data_entries[curData++] = data;
+                }
+                mips_identref[identref] = val;
+                declarations[identref] = &all_values[all_values_sp++];
+                declarations[identref]->emplacement = val->emplacement;
+                declarations[identref]->value = val->value;
+            }
+                break;
+            default:
+                break;
             }
             break;
         }
         case TFuncdef:
         {
+            int i;
             level = 1;
             process_function();
+            for(i = 0; i < 10; ++i)
+                temp_regs[i] = NULL;
             level = 0;
             break;
         }
@@ -799,27 +959,56 @@ void process_declaration(int old_val_sp)
 
 void process_function()
 {
-    int identref = tree[curTree++], maxdisp = tree[curTree++];
+    int identref = tree[curTree++], args, sp_add_code;
+    int i;
+    curTree++;
     code_instr[curCode++] = create_instr(LABEL, name_from_identref(identref), 0, 0);
     curTree++;
-    val_sp += 2;
 
-    //  Определения
-    while (tree[curTree] == TDeclid)
-        process_declaration(0);
+    /* Аргументы функции */
+    args = modetab[identab[identref + 2] + 1];
+    for(i = 0; i < args > 4 ? 4 : args; ++i);
 
-    //  Сохранение указателя на окно функции и адреса возврата
-    code_instr[curCode++] = create_instr(ADDIU, $sp, $sp, -val_sp * 4);
+    /* Сохранение указателя на окно функции и адреса возврата */
+    code_instr[sp_add_code = curCode++] = create_instr(ADDIU, $sp, $sp, -val_sp * 4);
     code_instr[curCode++] = create_instr(SW, $fp, $sp, val_sp * 4);
     code_instr[curCode++] = create_instr(SW, $ra, $sp, (val_sp - 1) * 4);
-    //  Запись адреса нового окна функции
+
+    /* Запись адреса нового окна функции */
     code_instr[curCode++] = create_instr(MOVE, $fp, $sp, 0);
 
-    //  Выражения
+    had_func_call = 0;
+    val_sp = 2;
+
+    /* Определения */
+    while (tree[curTree] == TDeclid)
+        process_declaration(val_sp);
+
+    code_instr[sp_add_code + 0].third_op = -val_sp * 4;
+    code_instr[sp_add_code + 1].third_op = val_sp * 4;
+    code_instr[sp_add_code + 2].third_op = (val_sp - 1) * 4;
+
+    /* Выражения */
     while (tree[curTree] != TEnd)
     {
         process_expression();
         eval_dynamic();
+    }
+    if(!had_func_call)
+    {
+        val_sp -= 2;
+        code_instr[sp_add_code + 1].code = code_instr[sp_add_code + 2].code = code_instr[sp_add_code + 3].code = DELETED;
+        code_instr[fp_code].code = code_instr[fp_code + 1].code = DELETED;
+        if(val_sp)
+        {
+            code_instr[sp_add_code].third_op = -val_sp * 4;
+            code_instr[fp_code + 2].third_op = val_sp * 4;
+        }
+        else
+        {
+            code_instr[sp_add_code].code = DELETED;
+            code_instr[fp_code + 2].code = DELETED;
+        }
     }
     val_sp = 0;
 }
