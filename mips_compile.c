@@ -1,6 +1,6 @@
 //  RuC2
 //
-//  Created by BSergei Bolotov on 03/Mar/2016.
+//  Created by Sergei Bolotov on 03/Mar/2016.
 //  Copyright (c) 2016 Sergei Bolotov. All rights reserved.
 //
 
@@ -13,18 +13,27 @@ FILE * out_mips;
 char * temp_label = "$label%d";
 int curTempLabel;
 
+/* временные регистры */
 int temp_regs_count = 10;
 ValueEntry* temp_regs[10] = {0};
+/* сохранённые регистры */
 int saved_regs_count = 8;
 ValueEntry* saved_regs[8] = {0};
+
+/* стэк операций */
 Operation op_stack[100] = {0};
-ValueEntry* val_stack[1000] = {0};
-ValueEntry* static_vals[100] = {0};
-ValueEntry all_values[1000] = {0};
+
+/* пул значений */
+ValueEntry all_values[10000] = {0};
+/* содержит текущее состояние переменной */
 ValueEntry* mips_identref[10000] = {0};
+/* содержит сведения об определении переменной */
 ValueEntry* declarations[10000] = {0};
+
+/* указатели на стэки */
 int op_sp, val_sp, all_values_sp;
 
+/* имя переменной на печать */
 char temp_name[100];
 
 IdentEntry data_entries[1000];

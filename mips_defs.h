@@ -1,6 +1,6 @@
 //  RuC2
 //
-//  Created by BSergei Bolotov on 05/Mar/2016.
+//  Created by Sergei Bolotov on 05/Mar/2016.
 //  Copyright (c) 2016 Sergei Bolotov. All rights reserved.
 //
 
