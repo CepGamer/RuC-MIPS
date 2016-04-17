@@ -278,6 +278,18 @@ void write_instr(Instruction instr)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
+    case SLE:
+        fprintf(output, "sle\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        break;
+    case SGE:
+        fprintf(output, "sge\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        break;
     case MOVE:
         fprintf(output, "move\t%s,%s\n"
                 , reg_to_string(instr.first_op)
@@ -330,6 +342,7 @@ void write_data(IdentEntry data)
         fprintf(output, ".word\t%d\n", data.value.integer);
         break;
     case ROWOFINT:
+    case ROWROWOFINT:
         if(data.value.pointer)
         {
             fprintf(output, ".word\t");
@@ -543,7 +556,7 @@ ValueEntry *eval_dynamic()
             (c >= POSTINCATR && c <= DECATR) ||
             (c >= POSTINCATRV && c <= DECATRV))
             prev = process_assign_at(c);
-        else if ((c >= LREM && c <= LDIV && c != LOGAND && c != LOGOR) ||
+        else if ((c >= LREM && c <= LDIV) ||
             (c >= EQEQR && c <= LDIVR))
             prev = process_binop(c);
         else
@@ -634,7 +647,6 @@ ValueEntry *process_assign(int code)
             case REMASS:
             case REMASSV:
                 code_instr[curCode++] = create_instr(REM, val_to_reg(t), val_to_reg(t), val_to_reg(a));
-                break;
                 break;
             case SHLASS:
             case SHLASSV:
@@ -760,19 +772,53 @@ ValueEntry *process_binop(int code)
     load_value(b);
     switch (code)
     {
+    case LOGAND:
+    case LOGOR:
+        break;
+    case LSHL:
+        code_instr[curCode++] = create_instr(SLLV, val_to_reg(a), val_to_reg(b), val_to_reg(a));
+        break;
+    case LSHR:
+        code_instr[curCode++] = create_instr(SRAV, val_to_reg(a), val_to_reg(b), val_to_reg(a));
+        break;
+    case LAND:
+        code_instr[curCode++] = create_instr(AND, val_to_reg(a), val_to_reg(b), val_to_reg(a));
+        break;
+    case LEXOR:
+        code_instr[curCode++] = create_instr(XOR, val_to_reg(a), val_to_reg(b), val_to_reg(a));
+        break;
+    case LOR:
+        code_instr[curCode++] = create_instr(OR, val_to_reg(a), val_to_reg(b), val_to_reg(a));
+        break;
     case LPLUS:
         code_instr[curCode++] = create_instr(ADDU, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LMINUS:
+        code_instr[curCode++] = create_instr(SUBU, val_to_reg(a), val_to_reg(b), val_to_reg(a));
+        break;
     case LMULT:
         code_instr[curCode++] = create_instr(MUL, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LDIV:
+        code_instr[curCode++] = create_instr(DIV, val_to_reg(a), val_to_reg(b), val_to_reg(a));
+        break;
+    case LREM:
+        break;
+    case EQEQ:
+        break;
+    case NOTEQ:
+        break;
     case LLT:
         code_instr[curCode++] = create_instr(SLT, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LGT:
         code_instr[curCode++] = create_instr(SGT, val_to_reg(a), val_to_reg(b), val_to_reg(a));
+        break;
+    case LLE:
+        code_instr[curCode++] = create_instr(SLE, val_to_reg(a), val_to_reg(b), val_to_reg(a));
+        break;
+    case LGE:
+        code_instr[curCode++] = create_instr(SGE, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     }
     b->emplacement = GARBAGE;

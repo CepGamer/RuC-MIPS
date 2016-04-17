@@ -59,6 +59,9 @@ typedef enum
     /* сравнение */
     SLT,
     SGT,
+    SLE,
+    SGE,
+    /* прочие */
     MOVE,
     SYSCALL
 } Instructions;
