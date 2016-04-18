@@ -45,6 +45,8 @@ int had_func_call;
 int delayed_slot = 1;
 int fp_code;
 
+int const_prop = 1;
+
 Instruction create_instr(Instructions code, int first_op, int second_op, int third_op)
 {
     Instruction ret;
@@ -392,20 +394,95 @@ Registers get_reg_from_instr(Instruction instr)
     return $0;
 }
 
+Value ret_val(Value a, Value b, int code)
+{
+    Value ret;
+    switch (code) {
+    case LPLUS:
+        ret.integer = b.integer + a.integer;
+        break;
+    case LMINUS:
+        ret.integer = b.integer - a.integer;
+        break;
+    case LOGAND:
+        ret.integer = b.integer && a.integer;
+        break;
+    case LOGOR:
+        ret.integer = b.integer || a.integer;
+        break;
+    case LSHL:
+        ret.integer = b.integer << a.integer;
+        break;
+    case LSHR:
+        ret.integer = b.integer >> a.integer;
+        break;
+    case LAND:
+        ret.integer = b.integer & a.integer;
+        break;
+    case LEXOR:
+        ret.integer = b.integer ^ a.integer;
+        break;
+    case LOR:
+        ret.integer = b.integer | a.integer;
+        break;
+    case LMULT:
+        ret.integer = b.integer * a.integer;
+        break;
+    case LDIV:
+        ret.integer = b.integer / a.integer;
+        break;
+    case LREM:
+        ret.integer = b.integer % a.integer;
+        break;
+    case EQEQ:
+        ret.integer = b.integer == a.integer;
+        break;
+    case NOTEQ:
+        ret.integer = b.integer != a.integer;
+        break;
+    case LLT:
+        ret.integer = b.integer < a.integer;
+        break;
+    case LGT:
+        ret.integer = b.integer > a.integer;
+        break;
+    case LLE:
+        ret.integer = b.integer <= a.integer;
+        break;
+    case LGE:
+        ret.integer = b.integer >= a.integer;
+        break;
+    default:
+        break;
+    }
+    return ret;
+}
+
 Value eval_static()
 {
     Value ret;
-    while(op_sp--)
+    int code;
+    if(!op_sp)
+        return ret;
+    switch (code = op_stack[--op_sp].code)
     {
-        switch (op_stack[op_sp].code) {
-        case TConst:
-            ret.integer = op_stack[op_sp].value.integer;
-            break;
-        default:
-            break;
-        }
+    case TConst:
+        ret.integer = op_stack[op_sp].value.integer;
+        break;
+    default:
+        ret = ret_val(eval_static(), eval_static(), code);
+        break;
     }
-    ++op_sp;
+    return ret;
+}
+
+ValueEntry *copy_value_entry(ValueEntry *entry)
+{
+    ValueEntry *ret = &all_values[all_values_sp++];
+
+    ret->emplacement = entry->emplacement;
+    ret->value = entry->value;
+
     return ret;
 }
 
@@ -413,7 +490,7 @@ void load_value(ValueEntry *val)
 {
     int i = 0;
     static int nxt = 0;
-    if(val->emplacement == TEMP || val->emplacement == SAVED)
+    if(val->emplacement == TEMP || val->emplacement == SAVED || val->emplacement == IDENT_)
         return;
 
 cycle:
@@ -465,16 +542,23 @@ ValueEntry* pop()
             ret->emplacement = STATIC;
             break;
         case TIdenttoval:
-            if(mips_identref[op_stack[op_sp].value.integer])
+            if(const_prop
+                    && mips_identref[op_stack[op_sp].value.integer]
+                    && mips_identref[op_stack[op_sp].value.integer]->emplacement != GARBAGE
+                    && declarations[op_stack[op_sp].value.integer]->flags & CONSTANT)
                 ret = mips_identref[op_stack[op_sp].value.integer];
             else
-                ret = &all_values[all_values_sp++];
-            ret->emplacement = declarations[op_stack[op_sp].value.integer]->emplacement;
-            ret->value = declarations[op_stack[op_sp].value.integer]->value;
-            load_value(ret);
+            {
+                ret = copy_value_entry(declarations[op_stack[op_sp].value.integer]);
+                mips_identref[op_stack[op_sp].value.integer] = ret;
+            }
+            if(ret->emplacement != STATIC)
+                load_value(ret);
             break;
         case TIdent:
-            ret = declarations[op_stack[op_sp].value.integer];
+            ret = &all_values[all_values_sp++];
+            ret->emplacement = IDENT_;
+            ret->value = op_stack[op_sp].value;
             break;
         case TSliceident:
         {
@@ -572,7 +656,10 @@ ValueEntry *eval_dynamic()
             switch (c)
             {
             case TReturnval:
-                code_instr[curCode++] = create_instr(MOVE, $v0, val_to_reg(prev), 0);
+                if(prev->emplacement == STATIC)
+                    code_instr[curCode++] = create_instr(ADDIU, $v0, $0, prev->value.integer);
+                else
+                    code_instr[curCode++] = create_instr(MOVE, $v0, val_to_reg(prev), 0);
             case TReturn:
                 //  Возврат адреса окна функции
                 code_instr[fp_code = curCode++] = create_instr(LW, $fp, $sp, val_sp * 4);
@@ -590,9 +677,14 @@ ValueEntry *eval_dynamic()
                 {
                 case LINT:
                     prev = pop();
-                    load_value(prev);
+                    if(prev->emplacement != STATIC)
+                    {
+                        load_value(prev);
+                        code_instr[curCode++] = create_instr(MOVE, $a0, val_to_reg(prev), 0);
+                    }
+                    else
+                        code_instr[curCode++] = create_instr(ADDIU, $a0, $0, prev->value.integer);
                     code_instr[curCode++] = create_instr(LI_, $v0, 1, 0);
-                    code_instr[curCode++] = create_instr(MOVE, $a0, val_to_reg(prev), 0);
                     code_instr[curCode++] = create_instr(SYSCALL, 0, 0, 0);
                     break;
                 default:
@@ -627,16 +719,6 @@ void assign_to_ValueEntry(ValueEntry *to_ass, ValueEntry *new_val)
     }
 }
 
-ValueEntry *copy_value_entry(ValueEntry *entry)
-{
-    ValueEntry *ret = &all_values[all_values_sp++];
-
-    ret->emplacement = entry->emplacement;
-    ret->value = entry->value;
-
-    return ret;
-}
-
 ValueEntry *process_assign(int code)
 {
     if ((code >= ASS && code <= DIVASS) ||
@@ -644,7 +726,20 @@ ValueEntry *process_assign(int code)
         (code >= ASSV && code <= DIVASSV) ||
         (code >= PLUSASSRV && code <= DIVASSRV))
     {
-        ValueEntry *a = pop(), *b = pop(), *t;
+        ValueEntry *a = pop(), *b = pop(), *t, *mips_ident = NULL;
+        if(a->emplacement == STATIC && b->emplacement == IDENT_)
+        {
+            mips_identref[b->value.integer]->value = a->value;
+            b->emplacement = GARBAGE;
+            return a;
+        }
+        if(b->emplacement == IDENT_)
+        {
+            mips_ident = mips_identref[b->value.integer];
+            b->emplacement = GARBAGE;
+            b = declarations[b->value.integer];
+            b->flags &= ALL ^ CONSTANT;
+        }
         if(code == ASS || code == ASSV)
             assign_to_ValueEntry(b, a);
         else
@@ -699,6 +794,11 @@ ValueEntry *process_assign(int code)
             assign_to_ValueEntry(b, t);
             a = t;
         }
+        if(mips_ident)
+        {
+            mips_ident->emplacement = a->emplacement;
+            mips_ident->value = a->value;
+        }
         return a;
     }
     else if((code >= POSTINC && code <= DEC) ||
@@ -707,8 +807,19 @@ ValueEntry *process_assign(int code)
         (code >= POSTINCRV && code <= DECRV))
     {
         ValueEntry *a = pop(), *b, *ret;
-        b = copy_value_entry(a);
-        load_value(b);
+        if(a->emplacement == IDENT_)
+        {
+            b = mips_identref[a->value.integer];
+            a->emplacement = GARBAGE;
+            a = declarations[a->value.integer];
+        }
+        if(!const_prop)
+        {
+            b->emplacement = GARBAGE;
+            b = copy_value_entry(a);
+        }
+        if(b->emplacement != STATIC)
+            load_value(b);
         ret = b;
         switch (code)
         {
@@ -721,10 +832,16 @@ ValueEntry *process_assign(int code)
                 ValueEntry *c = &all_values[all_values_sp++];
                 c->emplacement = GARBAGE;
                 load_value(c);
-                code_instr[curCode++] = create_instr(ADDIU, val_to_reg(c), val_to_reg(b), 0);
+                if(b->emplacement == STATIC)
+                    code_instr[curCode++] = create_instr(ADDIU, val_to_reg(c), $0, b->value.integer);
+                else
+                    code_instr[curCode++] = create_instr(ADDIU, val_to_reg(c), val_to_reg(b), 0);
                 ret = c;
             }
-            code_instr[curCode++] = create_instr(ADDIU, val_to_reg(b), val_to_reg(b), 1);
+            if(b->emplacement == STATIC)
+                b->value.integer++;
+            else
+                code_instr[curCode++] = create_instr(ADDIU, val_to_reg(b), val_to_reg(b), 1);
             assign_to_ValueEntry(a, b);
             break;
         case DECV:
@@ -777,11 +894,17 @@ ValueEntry *process_binop(int code)
     ValueEntry *a, *b, *ret;
     a = pop();
     b = pop();
+    if(a->emplacement == STATIC && b->emplacement == STATIC)
+    {
+        a->value = ret_val(a->value, b->value, code);
+        goto end;
+    }
     load_value(a);
     load_value(b);
     switch (code)
     {
     case LOGAND:
+        break;
     case LOGOR:
         break;
     case LSHL:
@@ -812,6 +935,7 @@ ValueEntry *process_binop(int code)
         code_instr[curCode++] = create_instr(DIV, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LREM:
+        code_instr[curCode++] = create_instr(REM, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case EQEQ:
         break;
@@ -830,6 +954,7 @@ ValueEntry *process_binop(int code)
         code_instr[curCode++] = create_instr(SGE, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     }
+end:
     b->emplacement = GARBAGE;
     ret = a;
     return ret;
@@ -844,6 +969,7 @@ void process_for()
     process_expression();
     eval_dynamic();
     //  проверка условия
+    const_prop = 0;
     code_instr[curCode++] = create_instr(LABEL, -1, cond_label, 0);
     process_expression();
     tmp = eval_dynamic();
@@ -862,6 +988,7 @@ void process_for()
     code_instr[curCode++] = create_instr(J, -1, incr_label, 0);
     //  Выход из цикла
     code_instr[curCode++] = create_instr(LABEL, -1, exit_label, 0);
+    const_prop = 1;
 }
 
 void process_if()
@@ -927,10 +1054,18 @@ void process_declaration(int old_val_sp)
                     val->value.pointer = name_from_identref(identref);
                     data_entries[curData++] = data;
                 }
-                mips_identref[identref] = val;
                 declarations[identref] = &all_values[all_values_sp++];
                 declarations[identref]->emplacement = val->emplacement;
                 declarations[identref]->value = val->value;
+                if(level)
+                {
+                    val->emplacement = STATIC;
+                    if(initref)
+                        val->value = data.value;
+                    else
+                        val->value.integer = 0;
+                }
+                mips_identref[identref] = val;
                 break;
             }
             case 1:
