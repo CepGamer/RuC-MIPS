@@ -74,13 +74,16 @@ typedef enum
     MEM,        /* память */
     STATIC,     /* значение известно на этапе компиляции */
     GARBAGE,    /* мусор */
-    OTHER       /* прочее */
+    OTHER,      /* прочее */
+    IDENT_      /* идентификатор */
 } Emplacement;
 
 typedef enum
 {
     UPDATESINLOOP   = 0x01,
-    CONSTANT        = 0x02
+    CONSTANT        = 0x02,
+
+    ALL             = 0xffff
 } Flags;
 
 typedef union {
@@ -96,13 +99,13 @@ typedef struct
     int type;
     int size;
     Value value;
-    int flags;
 } IdentEntry;
 
 typedef struct
 {
     Emplacement emplacement;
     Value value;
+    int flags;
 } ValueEntry;
 
 typedef struct
