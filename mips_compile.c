@@ -130,6 +130,14 @@ void fill_temp_name(int *pointer)
     while(temp_name[i++] = *pointer++);
 }
 
+void drop_temp_regs()
+{
+    int i = 0;
+    for(i; i < temp_regs_count; ++i)
+        if(temp_regs[i])
+            temp_regs[i]->emplacement = GARBAGE;
+}
+
 void write_instr(Instruction instr)
 {
     switch (instr.code) {
@@ -372,6 +380,8 @@ void process_function();
 void process_expression();
 void process_block();
 
+void mark_block();
+
 void process_for();
 void process_if();
 void process_while();
@@ -544,8 +554,7 @@ ValueEntry* pop()
         case TIdenttoval:
             if(const_prop
                     && mips_identref[op_stack[op_sp].value.integer]
-                    && mips_identref[op_stack[op_sp].value.integer]->emplacement != GARBAGE
-                    && declarations[op_stack[op_sp].value.integer]->flags & CONSTANT)
+                    && mips_identref[op_stack[op_sp].value.integer]->emplacement != GARBAGE)
                 ret = mips_identref[op_stack[op_sp].value.integer];
             else
             {
@@ -592,6 +601,7 @@ ValueEntry* pop()
         case TCall2:
             code_instr[curCode++] = create_instr(JAL, (int)(char*)op_stack[op_sp].value.pointer, 0, 0);
             had_func_call = 1;
+            drop_temp_regs();
             ret = &all_values[all_values_sp++];
             ret->emplacement = OTHER;
             ret->value.integer = $v0;
@@ -962,9 +972,11 @@ end:
 
 void process_for()
 {
-    int cond_label = curTempLabel++, incr_label = curTempLabel++, body_label = curTempLabel++, exit_label = curTempLabel++;
-    curTree += 4;
+    int cond_label = curTempLabel++, exit_label = curTempLabel++;
+    int old_ct, body_ct;
     ValueEntry *tmp;
+    body_ct = tree[curTree + 3];
+    curTree += 4;
     //  инициализация
     process_expression();
     eval_dynamic();
@@ -975,18 +987,21 @@ void process_for()
     tmp = eval_dynamic();
     load_value(tmp);
     code_instr[curCode++] = create_instr(BEQZ, val_to_reg(tmp), -1, exit_label);
-    code_instr[curCode++] = create_instr(J, -1, body_label, 0);
+    //  Тело цикла
+    old_ct = curTree;
+    curTree = body_ct;
+
+    process_block();
     //  инкремент
-    code_instr[curCode++] = create_instr(LABEL, -1, incr_label, 0);
+    old_ct ^= curTree;
+    curTree ^= old_ct;
+    old_ct ^= curTree;
     process_expression();
     eval_dynamic();
     code_instr[curCode++] = create_instr(J, -1, cond_label, 0);
-    //  Тело цикла
-    code_instr[curCode++] = create_instr(LABEL, -1, body_label, 0);
-    process_block();
 
-    code_instr[curCode++] = create_instr(J, -1, incr_label, 0);
     //  Выход из цикла
+    curTree = old_ct;
     code_instr[curCode++] = create_instr(LABEL, -1, exit_label, 0);
     const_prop = 1;
 }
@@ -1319,6 +1334,18 @@ void process_block()
         code_instr[curCode++] = create_instr(ADDIU, $sp, $sp, (val_sp - old_val_sp) * 4);
         val_sp = old_val_sp;
     }
+}
+
+void mark_block()
+{
+    int _tree = curTree;
+    if(tree[_tree] == TBegin)
+        while (tree[_tree++] != TEnd);
+    else
+        while (tree[_tree] != TExprend && tree[_tree] != TEnd)
+            ++_tree;
+    if(tree[_tree] == TExprend)
+        ++_tree;
 }
 
 void compile_mips()
