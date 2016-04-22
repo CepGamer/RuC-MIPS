@@ -43,7 +43,8 @@ int curTree, curData, curInit, curCode;
 int level;
 int had_func_call;
 int delayed_slot = 1;
-int fp_code;
+int fp_codes[100];
+int fp_codes_ptr;
 
 int const_prop = 1;
 
@@ -672,7 +673,7 @@ ValueEntry *eval_dynamic()
                     code_instr[curCode++] = create_instr(MOVE, $v0, val_to_reg(prev), 0);
             case TReturn:
                 //  Возврат адреса окна функции
-                code_instr[fp_code = curCode++] = create_instr(LW, $fp, $sp, val_sp * 4);
+                code_instr[fp_codes[fp_codes_ptr++] = curCode++] = create_instr(LW, $fp, $sp, val_sp * 4);
                 //  Возврат адреса возврата
                 code_instr[curCode++] = create_instr(LW, $ra, $sp, (val_sp - 1) * 4);
 
@@ -990,7 +991,7 @@ void process_for()
     //  Тело цикла
     old_ct = curTree;
     curTree = body_ct;
-
+    drop_temp_regs();
     process_block();
     //  инкремент
     old_ct ^= curTree;
@@ -1011,21 +1012,35 @@ void process_if()
     int else_ref = tree[++curTree];
     int else_label = curTempLabel++, exit_label = curTempLabel++;
     ValueEntry *cond;
-    ++curTree;
     //  условие
     process_expression();
     cond = eval_dynamic();
-    load_value(cond);
-    code_instr[curCode++] = create_instr(BEQZ, val_to_reg(cond), -1, else_ref ? else_label : exit_label);
-    //  если условие выполнено
-    process_block();
-    //  иначе
-    if(else_ref)
+
+    /* если условие постоянно */
+    if(cond->emplacement == STATIC)
+        if(cond->value.integer)
+            process_block();
+        else if(else_ref)
+        {
+            curTree = else_ref;
+            process_block();
+        }
+        else
+            skip_block();
+    else
     {
-        code_instr[curCode++] = create_instr(LABEL, -1, else_label, 0);
+        load_value(cond);
+        code_instr[curCode++] = create_instr(BEQZ, val_to_reg(cond), -1, else_ref ? else_label : exit_label);
+        //  если условие выполнено
         process_block();
+        //  иначе
+        if(else_ref)
+        {
+            code_instr[curCode++] = create_instr(LABEL, -1, else_label, 0);
+            process_block();
+        }
+        code_instr[curCode++] = create_instr(LABEL, -1, exit_label, 0);
     }
-    code_instr[curCode++] = create_instr(LABEL, -1, exit_label, 0);
 }
 
 void process_while()
@@ -1182,7 +1197,7 @@ void process_function()
     /* Запись адреса нового окна функции */
     code_instr[curCode++] = create_instr(MOVE, $fp, $sp, 0);
 
-    had_func_call = 0;
+    fp_codes_ptr = had_func_call = 0;
     val_sp = 2;
 
     /* Определения */
@@ -1201,18 +1216,22 @@ void process_function()
     }
     if(!had_func_call)
     {
+        int i = 0;
         val_sp -= 2;
         code_instr[sp_add_code + 1].code = code_instr[sp_add_code + 2].code = code_instr[sp_add_code + 3].code = DELETED;
-        code_instr[fp_code].code = code_instr[fp_code + 1].code = DELETED;
-        if(val_sp)
+        for(i; i < fp_codes_ptr; ++i)
         {
-            code_instr[sp_add_code].third_op = -val_sp * 4;
-            code_instr[fp_code + 2].third_op = val_sp * 4;
-        }
-        else
-        {
-            code_instr[sp_add_code].code = DELETED;
-            code_instr[fp_code + 2].code = DELETED;
+            code_instr[fp_codes[i]].code = code_instr[fp_codes[i] + 1].code = DELETED;
+            if(val_sp)
+            {
+                code_instr[sp_add_code].third_op = -val_sp * 4;
+                code_instr[fp_codes[i] + 2].third_op = val_sp * 4;
+            }
+            else
+            {
+                code_instr[sp_add_code].code = DELETED;
+                code_instr[fp_codes[i] + 2].code = DELETED;
+            }
         }
     }
     val_sp = 0;
@@ -1334,6 +1353,17 @@ void process_block()
         code_instr[curCode++] = create_instr(ADDIU, $sp, $sp, (val_sp - old_val_sp) * 4);
         val_sp = old_val_sp;
     }
+}
+
+void skip_block()
+{
+    if(tree[curTree] == TBegin)
+        while (tree[curTree++] != TEnd);
+    else
+        while (tree[curTree] != TExprend && tree[curTree] != TEnd)
+            ++curTree;
+    if(tree[curTree] == TExprend)
+        ++curTree;
 }
 
 void mark_block()
