@@ -146,6 +146,8 @@ void drop_temp_regs()
 void write_instr(Instruction instr)
 {
     switch (instr.code) {
+    case DELETED:
+        break;
     case J:
         if(instr.first_op < 0)
         {
@@ -201,6 +203,18 @@ void write_instr(Instruction instr)
         }
         else
             fprintf(output, "\tbeqz\t%s,%s\nnop\n"
+                    , reg_to_string(instr.first_op)
+                    , (char *)instr.second_op);
+        break;
+    case BNEZ:
+        if(instr.second_op < 0)
+        {
+            fprintf(output, "\tbnez\t%s,", reg_to_string(instr.first_op));
+            fprintf(output, temp_label, instr.third_op);
+            fprintf(output, "\nnop\n");
+        }
+        else
+            fprintf(output, "\tbnez\t%s,%s\nnop\n"
                     , reg_to_string(instr.first_op)
                     , (char *)instr.second_op);
         break;
@@ -1099,12 +1113,51 @@ void process_if()
 
 void process_while()
 {
+    int _break_label = break_label, _continue_label = continue_label;
+    ValueEntry *tmp;
+    break_label = curTempLabel++, continue_label = curTempLabel++;
 
+    const_prop = 0;
+    drop_temp_regs();
+
+    /* условие */
+    code_instr[curCode++] = create_instr(LABEL, -1, continue_label, 0);
+    process_expression();
+    tmp = eval_dynamic();
+    load_value(tmp);
+    code_instr[curCode++] = create_instr(BEQZ, val_to_reg(tmp), -1, break_label);
+
+    /* тело */
+    process_block();
+    code_instr[curCode++] = create_instr(LABEL, -1, break_label, 0);
+
+    break_label = _break_label, continue_label = _continue_label;
+    const_prop = 1;
 }
 
 void process_do_while()
 {
+    int _break_label = break_label, _continue_label = continue_label, body_label = curTempLabel++;
+    ValueEntry *tmp;
+    break_label = curTempLabel++, continue_label = curTempLabel++;
 
+    const_prop = 0;
+    drop_temp_regs();
+
+    /* тело */
+    code_instr[curCode++] = create_instr(LABEL, -1, body_label, 0);
+    process_block();
+
+    /* условие */
+    code_instr[curCode++] = create_instr(LABEL, -1, continue_label, 0);
+    process_expression();
+    tmp = eval_dynamic();
+    load_value(tmp);
+    code_instr[curCode++] = create_instr(BNEZ, val_to_reg(tmp), -1, body_label);
+    code_instr[curCode++] = create_instr(LABEL, -1, break_label, 0);
+
+    break_label = _break_label, continue_label = _continue_label;
+    const_prop = 1;
 }
 
 void process_switch()
@@ -1368,6 +1421,9 @@ void process_expression()
             break;
         case TWhile:
             process_while();
+            break;
+        case TDo:
+            process_do_while();
             break;
         case TCall1:
             curTree++;
