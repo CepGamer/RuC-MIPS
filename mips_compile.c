@@ -683,6 +683,12 @@ ValueEntry *eval_dynamic()
                 /* возврат по регистру $ra */
                 code_instr[curCode++] = create_instr(JR, $ra, 0, 0);
                 break;
+            case TContinue:
+                code_instr[curCode++] = create_instr(J, -1, continue_label, 0);
+                break;
+            case TBreak:
+                code_instr[curCode++] = create_instr(J, -1, break_label, 0);
+                break;
             case TPrint:
                 switch (op_stack[op_sp].value.integer)
                 {
@@ -973,9 +979,10 @@ end:
 
 void process_for()
 {
-    int cond_label = curTempLabel++, exit_label = curTempLabel++;
+    int cond_label = curTempLabel++, _break_label = break_label, _continue_label = continue_label;
     int old_ct, body_ct;
     ValueEntry *tmp;
+    break_label = curTempLabel++, continue_label = curTempLabel++;
     body_ct = tree[curTree + 3];
     curTree += 4;
     //  инициализация
@@ -987,7 +994,7 @@ void process_for()
     process_expression();
     tmp = eval_dynamic();
     load_value(tmp);
-    code_instr[curCode++] = create_instr(BEQZ, val_to_reg(tmp), -1, exit_label);
+    code_instr[curCode++] = create_instr(BEQZ, val_to_reg(tmp), -1, break_label);
     //  Тело цикла
     old_ct = curTree;
     curTree = body_ct;
@@ -997,14 +1004,16 @@ void process_for()
     old_ct ^= curTree;
     curTree ^= old_ct;
     old_ct ^= curTree;
+    code_instr[curCode++] = create_instr(LABEL, -1, continue_label, 0);
     process_expression();
     eval_dynamic();
     code_instr[curCode++] = create_instr(J, -1, cond_label, 0);
 
     //  Выход из цикла
     curTree = old_ct;
-    code_instr[curCode++] = create_instr(LABEL, -1, exit_label, 0);
+    code_instr[curCode++] = create_instr(LABEL, -1, break_label, 0);
     const_prop = 1;
+    break_label = _break_label, continue_label = _continue_label;
 }
 
 void process_if()
@@ -1287,6 +1296,8 @@ void process_expression()
             return;
         case TReturnval:
         case TAddrtoval:
+        case TBreak:
+        case TContinue:
             oper.code = c;
             op_stack[op_sp++] = oper;
             break;
