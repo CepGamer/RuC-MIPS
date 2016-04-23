@@ -30,6 +30,7 @@ typedef enum
     BEQ,
     BEQI,
     BEQZ,
+    BNEZ,
     LI_,
     LA_,
     LW,
