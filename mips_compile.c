@@ -41,12 +41,16 @@ Instruction initialise_instr[1000], code_instr[10000];
 
 int curTree, curData, curInit, curCode;
 int level;
+
+/* различные сохранённые данные о программе */
 int had_func_call;
-int delayed_slot = 1;
+int continue_label = -1, break_label = -1;
+
 int fp_codes[100];
 int fp_codes_ptr;
 
 int const_prop = 1;
+int delayed_slot = 1;
 
 Instruction create_instr(Instructions code, int first_op, int second_op, int third_op)
 {
@@ -145,32 +149,58 @@ void write_instr(Instruction instr)
     case J:
         if(instr.first_op < 0)
         {
-            fprintf(output, "j\t");
+            fprintf(output, "\tj\t");
             fprintf(output, temp_label, instr.second_op);
             fprintf(output, "\nnop\n");
         }
         else
         {
             fill_temp_name(instr.first_op);
-            fprintf(output, "j\t%s\nnop\n", temp_name);
+            fprintf(output, "\tj\t%s\nnop\n", temp_name);
         }
         break;
     case JAL:
         fill_temp_name(instr.first_op);
-        fprintf(output, "jal\t%s\nnop\n", temp_name);
+        fprintf(output, "\tjal\t%s\nnop\n", temp_name);
         break;
     case JR:
-        fprintf(output, "jr\t%s\nnop\n", reg_to_string(instr.first_op));
+        fprintf(output, "\tjr\t%s\nnop\n", reg_to_string(instr.first_op));
         break;
-    case BEQZ:
-        if(instr.second_op < 0)
+    case BEQ:
+        if(instr.third_op < 0)
         {
-            fprintf(output, "beqz\t%s,", reg_to_string(instr.first_op));
+            fprintf(output, "\tbeq\t%s,%s,", reg_to_string(instr.first_op), reg_to_string(instr.second_op));
+            fprintf(output, temp_label, -instr.third_op);
+            fprintf(output, "\nnop\n");
+        }
+        else
+            fprintf(output, "\tbeq\t%s,%s,%s\nnop\n"
+                    , reg_to_string(instr.first_op)
+                    , reg_to_string(instr.second_op)
+                    , (char *)instr.third_op);
+        break;
+    case BEQI:
+        if(instr.third_op < 0)
+        {
+            fprintf(output, "\tbeq\t%s,%d,", reg_to_string(instr.first_op), instr.second_op);
             fprintf(output, temp_label, instr.third_op);
             fprintf(output, "\nnop\n");
         }
         else
-            fprintf(output, "beqz\t%s,%s\nnop\n"
+            fprintf(output, "\tbeq\t%s,%d,%s\nnop\n"
+                    , reg_to_string(instr.first_op)
+                    , instr.second_op
+                    , (char *)instr.third_op);
+        break;
+    case BEQZ:
+        if(instr.second_op < 0)
+        {
+            fprintf(output, "\tbeqz\t%s,", reg_to_string(instr.first_op));
+            fprintf(output, temp_label, instr.third_op);
+            fprintf(output, "\nnop\n");
+        }
+        else
+            fprintf(output, "\tbeqz\t%s,%s\nnop\n"
                     , reg_to_string(instr.first_op)
                     , (char *)instr.second_op);
         break;
@@ -187,164 +217,176 @@ void write_instr(Instruction instr)
         }
         break;
     case ADD:
-        fprintf(output, "add\t%s,%s,%s\n"
+        fprintf(output, "\tadd\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
     case ADDU:
-        fprintf(output, "addu\t%s,%s,%s\n"
+        fprintf(output, "\taddu\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
     case SUB:
-        fprintf(output, "sub\t%s,%s,%s\n"
+        fprintf(output, "\tsub\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
     case SUBU:
-        fprintf(output, "subu\t%s,%s,%s\n"
+        fprintf(output, "\tsubu\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
     case ADDI:
-        fprintf(output, "addi\t%s,%s,%d\n"
+        fprintf(output, "\taddi\t%s,%s,%d\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , instr.third_op);
         break;
     case ADDIU:
-        fprintf(output, "addiu\t%s,%s,%d\n"
+        fprintf(output, "\taddiu\t%s,%s,%d\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , instr.third_op);
         break;
     case MUL:
-        fprintf(output, "mul\t%s,%s,%s\n"
+        fprintf(output, "\tmul\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
     case DIV:
     case REM:
-        fprintf(output, "div\t%s,%s,%s\n"
+        fprintf(output, "\tdiv\t%s,%s,%s\n"
                 , reg_to_string($0)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
-        fprintf(output, "teq\t%s,%s\n"
+        fprintf(output, "\tteq\t%s,%s\n"
                 , reg_to_string(instr.third_op)
                 , reg_to_string($0));
         if(instr.code == REM)
-            fprintf(output, "mfhi\t%s\n"
+            fprintf(output, "\tmfhi\t%s\n"
                     , reg_to_string(instr.first_op));
         else
-            fprintf(output, "mflo\t%s\n"
+            fprintf(output, "\tmflo\t%s\n"
                     , reg_to_string(instr.first_op));
         break;
     case OR:
-        fprintf(output, "or\t%s,%s,%s\n"
+        fprintf(output, "\tor\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
     case XOR:
-        fprintf(output, "xor\t%s,%s,%s\n"
+        fprintf(output, "\txor\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
     case AND:
-        fprintf(output, "and\t%s,%s,%s\n"
+        fprintf(output, "\tand\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
     case SLL:
-        fprintf(output, "sll\t%s,%s,%d\n"
+        fprintf(output, "\tsll\t%s,%s,%d\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , instr.third_op);
         break;
     case SLLV:
-        fprintf(output, "sllv\t%s,%s,%s\n"
+        fprintf(output, "\tsllv\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
     case SRA:
-        fprintf(output, "sra\t%s,%s,%d\n"
+        fprintf(output, "\tsra\t%s,%s,%d\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , instr.third_op);
         break;
     case SRAV:
-        fprintf(output, "srav\t%s,%s,%s\n"
+        fprintf(output, "\tsrav\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
     case SLT:
-        fprintf(output, "slt\t%s,%s,%s\n"
+        fprintf(output, "\tslt\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
     case SGT:
-        fprintf(output, "sgt\t%s,%s,%s\n"
+        fprintf(output, "\tsgt\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
     case SLE:
-        fprintf(output, "sle\t%s,%s,%s\n"
+        fprintf(output, "\tsle\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
     case SGE:
-        fprintf(output, "sge\t%s,%s,%s\n"
+        fprintf(output, "\tsge\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
+    case SEQ:
+        fprintf(output, "\tseq\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        break;
+    case SEQI:
+        fprintf(output, "\tseq\t%s,%s,%d\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , instr.third_op);
+        break;
     case MOVE:
-        fprintf(output, "move\t%s,%s\n"
+        fprintf(output, "\tmove\t%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op));
         break;
     case NEGU:
-        fprintf(output, "negu\t%s,%s\n"
+        fprintf(output, "\tnegu\t%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op));
         break;
     case LI_:
-        fprintf(output, "li\t%s,%d\n"
+        fprintf(output, "\tli\t%s,%d\n"
                 , reg_to_string(instr.first_op)
                 , instr.second_op);
         break;
     case LA_:
         fill_temp_name(instr.second_op);
-        fprintf(output, "la\t%s,%s\n"
+        fprintf(output, "\tla\t%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , temp_name);
         break;
     case LW:
-        fprintf(output, "lw\t%s,%d(%s)\n"
+        fprintf(output, "\tlw\t%s,%d(%s)\n"
                 , reg_to_string(instr.first_op)
                 , instr.third_op
                 , reg_to_string(instr.second_op));
         break;
     case SW:
-        fprintf(output, "sw\t%s,%d(%s)\n"
+        fprintf(output, "\tsw\t%s,%d(%s)\n"
                 , reg_to_string(instr.first_op)
                 , instr.third_op
                 , reg_to_string(instr.second_op));
         break;
     case SYSCALL:
-        fprintf(output, "syscall\n");
+        fprintf(output, "\tsyscall\n");
         break;
     default:
         break;
@@ -386,6 +428,8 @@ void mark_block();
 void process_for();
 void process_if();
 void process_while();
+void process_do_while();
+void process_switch();
 
 ValueEntry *process_assign(int code);
 ValueEntry *process_assign_at(int code);
@@ -955,6 +999,7 @@ ValueEntry *process_binop(int code)
         code_instr[curCode++] = create_instr(REM, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case EQEQ:
+        code_instr[curCode++] = create_instr(SEQ, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case NOTEQ:
         break;
@@ -991,6 +1036,7 @@ void process_for()
     //  проверка условия
     const_prop = 0;
     code_instr[curCode++] = create_instr(LABEL, -1, cond_label, 0);
+    drop_temp_regs();
     process_expression();
     tmp = eval_dynamic();
     load_value(tmp);
@@ -998,7 +1044,6 @@ void process_for()
     //  Тело цикла
     old_ct = curTree;
     curTree = body_ct;
-    drop_temp_regs();
     process_block();
     //  инкремент
     old_ct ^= curTree;
@@ -1055,6 +1100,49 @@ void process_if()
 void process_while()
 {
 
+}
+
+void process_do_while()
+{
+
+}
+
+void process_switch()
+{
+    ValueEntry *var;
+    int _break = break_label;
+    break_label = curTempLabel++;
+    /* выражение для перечисления */
+    process_expression();
+    var = eval_dynamic();
+
+    while(tree[curTree] != TEnd)
+    {
+        ValueEntry *res;
+        int old_code = curCode;
+        int is_def = 0;
+        while(tree[curTree] != TCase && tree[curTree] != TDefault)
+        {
+            process_block();
+            res = eval_dynamic();
+        }
+        if(tree[curTree] == TDefault)
+            is_def = 1;
+        if(var->emplacement == STATIC)
+        {
+            if(!is_def || res->value.integer != var->value.integer)
+                curCode = old_code;
+            continue;
+        }
+        else
+        {
+            code_instr[curCode++] = create_instr(SEQ, val_to_reg(res), val_to_reg(var), val_to_reg(res));
+            code_instr[curCode++] = create_instr(BEQZ, val_to_reg(res), -1, curTempLabel);
+        }
+        curTree += 2;
+    }
+    code_instr[curCode++] = create_instr(LABEL, -1, break_label, 0);
+    break_label = _break;
 }
 
 void process_declaration(int old_val_sp)
@@ -1196,7 +1284,7 @@ void process_function()
 
     /* Аргументы функции */
     args = modetab[identab[identref + 2] + 1];
-    for(i = 0; i < args > 4 ? 4 : args; ++i);
+    for(i = 0; i < (args > 4 ? 4 : args); ++i);
 
     /* Сохранение указателя на окно функции и адреса возврата */
     code_instr[sp_add_code = curCode++] = create_instr(ADDIU, $sp, $sp, -val_sp * 4);
@@ -1275,7 +1363,12 @@ void process_expression()
         case TIf:
             process_if();
             break;
+        case TSwitch:
+            process_switch();
+            break;
         case TWhile:
+            process_while();
+            break;
         case TCall1:
             curTree++;
             break;
@@ -1353,6 +1446,7 @@ void process_block()
             process_expression();
             eval_dynamic();
         }
+        curTree++;
     }
     else
     {

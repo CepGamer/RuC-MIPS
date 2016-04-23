@@ -27,6 +27,8 @@ typedef enum
     J,
     JR,
     JAL,
+    BEQ,
+    BEQI,
     BEQZ,
     LI_,
     LA_,
@@ -61,6 +63,8 @@ typedef enum
     SGT,
     SLE,
     SGE,
+    SEQ,
+    SEQI,
     /* прочие */
     MOVE,
     SYSCALL
