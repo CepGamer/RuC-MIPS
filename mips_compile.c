@@ -16,6 +16,7 @@ int curTempLabel;
 /* временные регистры */
 int temp_regs_count = 10;
 ValueEntry* temp_regs[10] = {0};
+ValueDiff old_temp_regs[10] = {0};
 /* сохранённые регистры */
 int saved_regs_count = 8;
 ValueEntry* saved_regs[8] = {0};
@@ -39,8 +40,12 @@ char temp_name[100];
 IdentEntry data_entries[1000];
 Instruction initialise_instr[1000], code_instr[10000];
 
-int curTree, curData, curInit, curCode;
+IdentDiff changed_ids[1000];
+ValueDiff changed_vals[1000];
+
+int curTree, curData, curInit, curCode, curChangedId, curChangedVal;
 int level;
+int track_changes;
 
 /* различные сохранённые данные о программе */
 int had_func_call;
@@ -49,8 +54,23 @@ int continue_label = -1, break_label = -1;
 int fp_codes[100];
 int fp_codes_ptr;
 
-int const_prop = 1;
+int propagate_constants = 1;
 int delayed_slot = 1;
+
+void assign_ValueEntry(ValueEntry *ptr, ValueEntry *to_ass)
+{
+    ptr->emplacement = to_ass->emplacement;
+    ptr->flags = to_ass->flags;
+    ptr->value = to_ass->value;
+}
+
+ValueEntry *copy_value_entry(ValueEntry *entry)
+{
+    ValueEntry *ret = &all_values[all_values_sp++];
+
+    assign_ValueEntry(ret, entry);
+    return ret;
+}
 
 Instruction create_instr(Instructions code, int first_op, int second_op, int third_op)
 {
@@ -60,6 +80,64 @@ Instruction create_instr(Instructions code, int first_op, int second_op, int thi
     ret.second_op = second_op;
     ret.third_op = third_op;
     return ret;
+}
+
+IdentDiff create_ident_diff(int ident, ValueEntry old)
+{
+    IdentDiff diff;
+    diff.ident = ident;
+    diff.old = old;
+    return diff;
+}
+
+ValueDiff create_value_diff(ValueEntry *ident, ValueEntry old)
+{
+    ValueDiff diff;
+    diff.ident = ident;
+    diff.old = old;
+    return diff;
+}
+
+void save_temp()
+{
+    int i;
+    for(i = 0; i < temp_regs_count; ++i)
+        if(temp_regs[i])
+            old_temp_regs[i] = create_value_diff(temp_regs[i], *temp_regs[i]);
+}
+
+void restore_temp()
+{
+    int i;
+    for(i = 0; i < temp_regs_count; ++i)
+    {
+        temp_regs[i] = old_temp_regs[i].ident;
+        if(temp_regs[i])
+            assign_ValueEntry(temp_regs[i], &old_temp_regs[i].old);
+    }
+}
+
+void restore_from_diff()
+{
+    restore_temp();
+    while(curChangedId--)
+    {
+        assign_ValueEntry(mips_identref[changed_ids[curChangedId].ident], &changed_ids[curChangedId].old);
+        if(changed_ids[curChangedId].old.emplacement == TEMP)
+            temp_regs[changed_ids[curChangedId].old.value.integer] = mips_identref[changed_ids[curChangedId].ident];
+    }
+    curChangedId = 0;
+}
+
+void start_track_changes()
+{
+    track_changes = 1;
+    save_temp();
+}
+
+void stop_track_changes()
+{
+    track_changes = 0;
 }
 
 char * name_from_identref(int identref)
@@ -77,6 +155,8 @@ Registers val_to_reg(ValueEntry *val)
         else
             return $t8 + val->value.integer - 8;
         break;
+    case ARG:
+        return val->value.integer + $a0;
     case OTHER:
         return val->value.integer;
     default:
@@ -98,6 +178,10 @@ char * reg_to_string(Registers reg)
         return "$a0";
     case $a1:
         return "$a1";
+    case $a2:
+        return "$a2";
+    case $a3:
+        return "$a3";
     case $t0:
         return "$t0";
     case $t1:
@@ -366,6 +450,18 @@ void write_instr(Instruction instr)
                 , reg_to_string(instr.second_op)
                 , instr.third_op);
         break;
+    case SNE:
+        fprintf(output, "\tsne\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        break;
+    case SNEI:
+        fprintf(output, "\tsne\t%s,%s,%d\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , instr.third_op);
+        break;
     case MOVE:
         fprintf(output, "\tmove\t%s,%s\n"
                 , reg_to_string(instr.first_op)
@@ -417,6 +513,10 @@ void write_data(IdentEntry data)
     case LINT:
         fprintf(output, ".word\t%d\n", data.value.integer);
         break;
+    case LFLOAT:
+        break;
+    case LCHAR:
+        break;
     case ROWOFINT:
     case ROWROWOFINT:
         if(data.value.pointer)
@@ -428,6 +528,12 @@ void write_data(IdentEntry data)
         }
         else
             fprintf(output, ".space\t%d\n", data.size * sizeof(int));
+        break;
+    case ROWOFFLOAT:
+    case ROWROWOFFLOAT:
+        break;
+    case ROWOFCHAR:
+    case ROWROWOFCHAR:
         break;
     }
 }
@@ -463,7 +569,7 @@ Registers get_reg_from_instr(Instruction instr)
     return $0;
 }
 
-Value ret_val(Value a, Value b, int code)
+Value ret_val_int(Value a, Value b, int code)
 {
     Value ret;
     switch (code) {
@@ -539,19 +645,9 @@ Value eval_static()
         ret.integer = op_stack[op_sp].value.integer;
         break;
     default:
-        ret = ret_val(eval_static(), eval_static(), code);
+        ret = ret_val_int(eval_static(), eval_static(), code);
         break;
     }
-    return ret;
-}
-
-ValueEntry *copy_value_entry(ValueEntry *entry)
-{
-    ValueEntry *ret = &all_values[all_values_sp++];
-
-    ret->emplacement = entry->emplacement;
-    ret->value = entry->value;
-
     return ret;
 }
 
@@ -580,6 +676,7 @@ cycle:
                                                        , val_to_reg(&t), 0);
                 break;
             case OTHER:
+            case ARG:
                 code_instr[curCode++] = create_instr(MOVE, val_to_reg(&t), val_to_reg(val), 0);
                 break;
             case STACK:
@@ -611,7 +708,7 @@ ValueEntry* pop()
             ret->emplacement = STATIC;
             break;
         case TIdenttoval:
-            if(const_prop
+            if(propagate_constants
                     && mips_identref[op_stack[op_sp].value.integer]
                     && mips_identref[op_stack[op_sp].value.integer]->emplacement != GARBAGE)
                 ret = mips_identref[op_stack[op_sp].value.integer];
@@ -751,7 +848,6 @@ ValueEntry *eval_dynamic()
                 switch (op_stack[op_sp].value.integer)
                 {
                 case LINT:
-                    prev = pop();
                     if(prev->emplacement != STATIC)
                     {
                         load_value(prev);
@@ -787,10 +883,18 @@ void assign_to_ValueEntry(ValueEntry *to_ass, ValueEntry *new_val)
         load_value(new_val);
         code_instr[curCode++] = create_instr(SW, val_to_reg(new_val), val_to_reg(c), 0);
     }
-    else if (to_ass->emplacement == STACK)
+    else if(to_ass->emplacement == STACK)
     {
         load_value(new_val);
         code_instr[curCode++] = create_instr(SW, val_to_reg(new_val), $sp, (val_sp - to_ass->value.integer) * 4);
+    }
+    else if(to_ass->emplacement == ARG)
+    {
+        load_value(new_val);
+        if(new_val->emplacement == STATIC)
+            code_instr[curCode++] = create_instr(ADDIU, val_to_reg(to_ass), $0, new_val->value.integer);
+        else
+            code_instr[curCode++] = create_instr(ADDIU, val_to_reg(to_ass), val_to_reg(new_val), 0);
     }
 }
 
@@ -804,12 +908,18 @@ ValueEntry *process_assign(int code)
         ValueEntry *a = pop(), *b = pop(), *t, *mips_ident = NULL;
         if(a->emplacement == STATIC && b->emplacement == IDENT_)
         {
+            if(track_changes)
+                changed_ids[curChangedId++] = create_ident_diff(b->value.integer, *mips_identref[b->value.integer]);
+            mips_identref[b->value.integer]->emplacement = STATIC;
             mips_identref[b->value.integer]->value = a->value;
+            assign_to_ValueEntry(declarations[b->value.integer], a);
             b->emplacement = GARBAGE;
             return a;
         }
         if(b->emplacement == IDENT_)
         {
+            if(track_changes)
+                changed_ids[curChangedId++] = create_ident_diff(b->value.integer, *mips_identref[b->value.integer]);
             mips_ident = mips_identref[b->value.integer];
             b->emplacement = GARBAGE;
             b = declarations[b->value.integer];
@@ -888,7 +998,7 @@ ValueEntry *process_assign(int code)
             a->emplacement = GARBAGE;
             a = declarations[a->value.integer];
         }
-        if(!const_prop)
+        if(!propagate_constants)
         {
             b->emplacement = GARBAGE;
             b = copy_value_entry(a);
@@ -971,7 +1081,7 @@ ValueEntry *process_binop(int code)
     b = pop();
     if(a->emplacement == STATIC && b->emplacement == STATIC)
     {
-        a->value = ret_val(a->value, b->value, code);
+        a->value = ret_val_int(a->value, b->value, code);
         goto end;
     }
     load_value(a);
@@ -1016,6 +1126,7 @@ ValueEntry *process_binop(int code)
         code_instr[curCode++] = create_instr(SEQ, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case NOTEQ:
+        code_instr[curCode++] = create_instr(SNE, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LLT:
         code_instr[curCode++] = create_instr(SLT, val_to_reg(a), val_to_reg(b), val_to_reg(a));
@@ -1048,7 +1159,7 @@ void process_for()
     process_expression();
     eval_dynamic();
     //  проверка условия
-    const_prop = 0;
+    propagate_constants = 0;
     code_instr[curCode++] = create_instr(LABEL, -1, cond_label, 0);
     drop_temp_regs();
     process_expression();
@@ -1071,7 +1182,7 @@ void process_for()
     //  Выход из цикла
     curTree = old_ct;
     code_instr[curCode++] = create_instr(LABEL, -1, break_label, 0);
-    const_prop = 1;
+    propagate_constants = 1;
     break_label = _break_label, continue_label = _continue_label;
 }
 
@@ -1117,7 +1228,7 @@ void process_while()
     ValueEntry *tmp;
     break_label = curTempLabel++, continue_label = curTempLabel++;
 
-    const_prop = 0;
+    propagate_constants = 0;
     drop_temp_regs();
 
     /* условие */
@@ -1132,7 +1243,7 @@ void process_while()
     code_instr[curCode++] = create_instr(LABEL, -1, break_label, 0);
 
     break_label = _break_label, continue_label = _continue_label;
-    const_prop = 1;
+    propagate_constants = 1;
 }
 
 void process_do_while()
@@ -1141,7 +1252,7 @@ void process_do_while()
     ValueEntry *tmp;
     break_label = curTempLabel++, continue_label = curTempLabel++;
 
-    const_prop = 0;
+    propagate_constants = 0;
     drop_temp_regs();
 
     /* тело */
@@ -1157,7 +1268,7 @@ void process_do_while()
     code_instr[curCode++] = create_instr(LABEL, -1, break_label, 0);
 
     break_label = _break_label, continue_label = _continue_label;
-    const_prop = 1;
+    propagate_constants = 1;
 }
 
 void process_switch()
@@ -1168,17 +1279,22 @@ void process_switch()
     /* выражение для перечисления */
     process_expression();
     var = eval_dynamic();
+    curTree++;
+    start_track_changes();
 
     while(tree[curTree] != TEnd)
     {
         ValueEntry *res;
         int old_code = curCode;
         int is_def = 0;
-        while(tree[curTree] != TCase && tree[curTree] != TDefault)
+        curChangedId = 0;
+        while(tree[curTree] != TCase && tree[curTree] != TDefault
+              && tree[curTree] != TEnd)
         {
             process_block();
             res = eval_dynamic();
         }
+        restore_from_diff();
         if(tree[curTree] == TDefault)
             is_def = 1;
         if(var->emplacement == STATIC)
@@ -1189,13 +1305,33 @@ void process_switch()
         }
         else
         {
-            code_instr[curCode++] = create_instr(SEQ, val_to_reg(res), val_to_reg(var), val_to_reg(res));
+            code_instr[curCode++] = create_instr(LABEL, -1, curTempLabel++, 0);
+            load_value(var);
+            if(res->emplacement == STATIC)
+            {
+                int r = res->value.integer;
+                res->emplacement = GARBAGE;
+                load_value(res);
+                code_instr[curCode++] = create_instr(SEQI, val_to_reg(res), val_to_reg(var), r);
+            }
+            else
+            {
+                load_value(var);
+                code_instr[curCode++] = create_instr(SEQ, val_to_reg(res), val_to_reg(var), val_to_reg(res));
+            }
             code_instr[curCode++] = create_instr(BEQZ, val_to_reg(res), -1, curTempLabel);
         }
-        curTree += 2;
+        if(tree[curTree] != TEnd)
+            curTree += 2;
+        else
+            break;
     }
+    stop_track_changes();
+    code_instr[curCode++] = create_instr(LABEL, -1, curTempLabel++, 0);
+    drop_temp_regs();
     code_instr[curCode++] = create_instr(LABEL, -1, break_label, 0);
     break_label = _break;
+    curTree++;
 }
 
 void process_declaration(int old_val_sp)
@@ -1235,8 +1371,7 @@ void process_declaration(int old_val_sp)
                     data_entries[curData++] = data;
                 }
                 declarations[identref] = &all_values[all_values_sp++];
-                declarations[identref]->emplacement = val->emplacement;
-                declarations[identref]->value = val->value;
+                assign_ValueEntry(declarations[identref], val);
                 if(level)
                 {
                     val->emplacement = STATIC;
@@ -1303,8 +1438,7 @@ void process_declaration(int old_val_sp)
                 }
                 mips_identref[identref] = val;
                 declarations[identref] = &all_values[all_values_sp++];
-                declarations[identref]->emplacement = val->emplacement;
-                declarations[identref]->value = val->value;
+                assign_ValueEntry(&declarations[identref], val);
             }
                 break;
             default:
@@ -1314,11 +1448,9 @@ void process_declaration(int old_val_sp)
         }
         case TFuncdef:
         {
-            int i;
             level = 1;
             process_function();
-            for(i = 0; i < 10; ++i)
-                temp_regs[i] = NULL;
+            drop_temp_regs();
             level = 0;
             break;
         }
@@ -1333,11 +1465,28 @@ void process_function()
     int i;
     curTree++;
     code_instr[curCode++] = create_instr(LABEL, name_from_identref(identref), 0, 0);
-    curTree++;
+
+    /* размер стэка */
+    val_sp = 0;
 
     /* Аргументы функции */
     args = modetab[identab[identref + 2] + 1];
-    for(i = 0; i < (args > 4 ? 4 : args); ++i);
+    for(i = 0; i < (args > 4 ? 4 : args); ++i)
+    {
+        ValueEntry *val = &all_values[all_values_sp++];
+        val->emplacement = ARG;
+        val->value.integer = i;
+        declarations[tree[curTree++]] = val;
+    }
+    for(i = 0; i < args - 4; ++i)
+    {
+        ValueEntry *val = &all_values[all_values_sp++];
+        val->emplacement = STACK;
+        val->value.integer = val_sp++;
+        declarations[tree[curTree++]] = val;
+    }
+    curTree++;
+    val_sp += 2;
 
     /* Сохранение указателя на окно функции и адреса возврата */
     code_instr[sp_add_code = curCode++] = create_instr(ADDIU, $sp, $sp, -val_sp * 4);
@@ -1348,7 +1497,6 @@ void process_function()
     code_instr[curCode++] = create_instr(MOVE, $fp, $sp, 0);
 
     fp_codes_ptr = had_func_call = 0;
-    val_sp = 2;
 
     /* Определения */
     while (tree[curTree] == TDeclid)
@@ -1392,7 +1540,7 @@ void process_expression()
     while (tree[curTree] != TExprend && tree[curTree] != TEnd)
     {
         Operation oper;
-        int c;
+        int c, i, size;
         switch (c = tree[curTree++])
         {
         case TConst:
@@ -1420,13 +1568,29 @@ void process_expression()
             process_switch();
             break;
         case TWhile:
+            curTree++;
             process_while();
             break;
         case TDo:
+            curTree++;
             process_do_while();
             break;
-        case TCall1:
+        case TLabel:
+        case TGoto:
             curTree++;
+            break;
+        case TCall1:
+            if((size = tree[curTree++]) > 4);
+            for(i = 0; i < size; ++i)
+            {
+                ValueEntry *r;
+                process_expression();
+                r = pop();
+                if(r->emplacement == STATIC)
+                    code_instr[curCode++] = create_instr(ADDIU, $a0 + i, $0, r->value.integer);
+                else
+                    code_instr[curCode++] = create_instr(ADDIU, $a0 + i, val_to_reg(r), 0);
+            }
             break;
         case TCall2:
             oper.code = TCall2;
@@ -1543,9 +1707,11 @@ void compile_mips()
 {
     int i;
     out_mips = fopen(outfile, "w");
-    curTree = curData = curInit = curCode = 0;
+    curTree = curData = curInit = curCode = curChangedId = 0;
     curTempLabel = 0;
     op_sp = val_sp = all_values_sp = 0;
+    track_changes = 0;
+    propagate_constants = 1;
     do
     {
         level = 0;
