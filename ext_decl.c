@@ -1045,23 +1045,23 @@ void function_definition()
         if (functype != identab[pred+2])
             error(decl_and_def_have_diff_type);
     curid = id;
+    functions[fn]= curTree;
+    totree(TFuncdef);
+    totree(fid);
+    pred = curTree++;
+    repr = oldrepr;
     for (i=0; i < n; i++)
     {
         type = modetab[functype+i+2];
         repr = functions[fn+i+1];
         if (repr > 0)
-            toidentab(0);
+            totree(toidentab(0));
         else
         {
             repr = -repr;
             toidentab(-1);
         }
     }
-    functions[fn]= curTree;
-    totree(TFuncdef);
-    totree(fid);
-    pred = curTree++;
-    repr = oldrepr;
     block(0);
     if (ftype == FUNCVOID && tree[curTree - 1] != TReturn)
     {

@@ -52,11 +52,19 @@ void tablesandtree()
     i = 0;
     while (i < curTree)
     {
+        int j, size;
         fprintf(output, "tc %i) ", i);
         switch (tree[i++])
         {
             case TFuncdef:
-                fprintf(output, "TFuncdef %i %i\n", tree[i++], tree[i++]);
+                fprintf(output, "TFuncdef %i %i", tree[i++], tree[i++]);
+                for(j = 0, size = modetab[identab[tree[i - 2] + 2] + 1]; j < size; j++)
+                    if(j == size - 1)
+                        fprintf(output, " %d\n", tree[i++]);
+                    else
+                        fprintf(output, " %d", tree[i++]);
+                if(size == 0)
+                    fprintf(output, "\n");
                 break;
             case TDeclid:
                 fprintf(output, "TDeclid %i %i %i\n", tree[i++], tree[i++], tree[i++]);
@@ -89,7 +97,7 @@ void tablesandtree()
                 fprintf(output, "TSwitch\n");
                 break;
             case TCase:
-                fprintf(output, "TCase\n");
+                fprintf(output, "TCase %d\n", tree[i++]);
                 break;
             case TDefault:
                 fprintf(output, "TDefault\n");
