@@ -66,6 +66,8 @@ typedef enum
     SGE,
     SEQ,
     SEQI,
+    SNE,
+    SNEI,
     /* прочие */
     MOVE,
     SYSCALL
@@ -75,6 +77,7 @@ typedef enum
 {
     SAVED,      /* сохранённый регистр */
     TEMP,       /* временный регистр */
+    ARG,        /* регистр аргументов */
     STACK,      /* стэк */
     MEM,        /* память */
     STATIC,     /* значение известно на этапе компиляции */
@@ -112,6 +115,18 @@ typedef struct
     Value value;
     int flags;
 } ValueEntry;
+
+typedef struct
+{
+    ValueEntry old;
+    int ident;
+} IdentDiff;
+
+typedef struct
+{
+    ValueEntry old;
+    ValueEntry *ident;
+} ValueDiff;
 
 typedef struct
 {
