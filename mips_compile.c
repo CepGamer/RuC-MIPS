@@ -574,11 +574,20 @@ Value ret_val_int(Value a, Value b, int code)
     Value ret;
     switch (code) {
     case LPLUS:
+    case PLUSASS:
+    case PLUSASSV:
+    case PLUSASSAT:
+    case PLUSASSATV:
         ret.integer = b.integer + a.integer;
         break;
     case LMINUS:
+    case MINUSASS:
+    case MINUSASSV:
+    case MINUSASSAT:
+    case MINUSASSATV:
         ret.integer = b.integer - a.integer;
         break;
+    //  TODO продолжить
     case LOGAND:
         ret.integer = b.integer && a.integer;
         break;
@@ -910,13 +919,18 @@ ValueEntry *process_assign(int code)
         {
             if(track_changes)
                 changed_ids[curChangedId++] = create_ident_diff(b->value.integer, *mips_identref[b->value.integer]);
-            mips_identref[b->value.integer]->emplacement = STATIC;
-            mips_identref[b->value.integer]->value = a->value;
-            assign_to_ValueEntry(declarations[b->value.integer], a);
+            if(mips_identref[b->value.integer]->emplacement == STATIC)
+            {
+                mips_identref[b->value.integer]->value = ret_val_int(mips_identref[b->value.integer]->value, a->value, code);
+                a->emplacement = GARBAGE;
+                b->emplacement = GARBAGE;
+                return mips_identref[b->value.integer];
+            }
+            mips_ident = mips_identref[b->value.integer];
             b->emplacement = GARBAGE;
-            return a;
+            b = declarations[b->value.integer];
         }
-        if(b->emplacement == IDENT_)
+        else if (b->emplacement == IDENT_)
         {
             if(track_changes)
                 changed_ids[curChangedId++] = create_ident_diff(b->value.integer, *mips_identref[b->value.integer]);
@@ -925,12 +939,14 @@ ValueEntry *process_assign(int code)
             b = declarations[b->value.integer];
             b->flags &= ALL ^ CONSTANT;
         }
-        if(code == ASS || code == ASSV)
-            assign_to_ValueEntry(b, a);
-        else
+        //  TODO а->emplacement == STATIC
+        if(code != ASS && code != ASSV)
         {
             t = copy_value_entry(b);
-            load_value(t);
+            if(mips_ident->emplacement == GARBAGE)
+                load_value(t);
+            else
+                load_value(t = mips_ident);
             switch (code)
             {
             case REMASS:
@@ -976,9 +992,10 @@ ValueEntry *process_assign(int code)
             default:
                 break;
             }
-            assign_to_ValueEntry(b, t);
+            a->emplacement = GARBAGE;
             a = t;
         }
+        assign_to_ValueEntry(b, a);
         if(mips_ident)
         {
             mips_ident->emplacement = a->emplacement;
@@ -1020,6 +1037,7 @@ ValueEntry *process_assign(int code)
                 if(b->emplacement == STATIC)
                     code_instr[curCode++] = create_instr(ADDIU, val_to_reg(c), $0, b->value.integer);
                 else
+                    //  TODO убрать c, она здесь лишняя
                     code_instr[curCode++] = create_instr(ADDIU, val_to_reg(c), val_to_reg(b), 0);
                 ret = c;
             }
@@ -1294,6 +1312,7 @@ void process_switch()
             process_block();
             res = eval_dynamic();
         }
+        //  TODO восстанавливать ТОЛЬКО после break
         restore_from_diff();
         if(tree[curTree] == TDefault)
             is_def = 1;
