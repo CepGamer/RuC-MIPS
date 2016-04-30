@@ -27,6 +27,7 @@ typedef enum
     J,
     JR,
     JAL,
+    JALR,
     BEQ,
     BEQI,
     BEQZ,
@@ -43,18 +44,25 @@ typedef enum
     ADDU,
     SUB,
     SUBU,
+    SUBIU,
     ADDI,
     ADDIU,
 
     /* умножение и деление */
     MUL,
+    MULI,
     DIV,
+    DIVI,
     REM,
+    REMI,
 
     /* логические */
     OR,
+    ORI,
     XOR,
+    XORI,
     AND,
+    ANDI,
     SLL,
     SLLV,
     SRA,
