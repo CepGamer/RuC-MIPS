@@ -7,19 +7,22 @@
 #include "global_vars.h"
 #include "mips_defs.h"
 
-char * outfile = "result.asm";
-FILE * out_mips;
+char *outfile = "result.asm";
+FILE *out_mips;
 
-char * temp_label = "$label%d";
+char *temp_label = "$label%d";
 int curTempLabel;
 
+/* регистры аргументов */
+int arg_regs_count = 4;
+ValueEntry *arg_regs[4];
 /* временные регистры */
 int temp_regs_count = 10;
-ValueEntry* temp_regs[10] = {0};
+ValueEntry *temp_regs[10] = {0};
 ValueDiff old_temp_regs[10] = {0};
 /* сохранённые регистры */
 int saved_regs_count = 8;
-ValueEntry* saved_regs[8] = {0};
+ValueEntry *saved_regs[8] = {0};
 
 /* стэк операций */
 Operation op_stack[100] = {0};
@@ -27,9 +30,9 @@ Operation op_stack[100] = {0};
 /* пул значений */
 ValueEntry all_values[10000] = {0};
 /* содержит текущее состояние переменной */
-ValueEntry* mips_identref[10000] = {0};
+ValueEntry *mips_identref[10000] = {0};
 /* содержит сведения об определении переменной */
-ValueEntry* declarations[10000] = {0};
+ValueEntry *declarations[10000] = {0};
 
 /* указатели на стэки */
 int op_sp, val_sp, all_values_sp;
@@ -49,6 +52,7 @@ int track_changes;
 
 /* различные сохранённые данные о программе */
 int had_func_call;
+int cur_type;
 int continue_label = -1, break_label = -1;
 
 int fp_codes[100];
@@ -138,6 +142,11 @@ void start_track_changes()
 void stop_track_changes()
 {
     track_changes = 0;
+}
+
+int type_from_identref(int identref)
+{
+    return identab[identref + 2];
 }
 
 char * name_from_identref(int identref)
@@ -252,6 +261,9 @@ void write_instr(Instruction instr)
     case JR:
         fprintf(output, "\tjr\t%s\nnop\n", reg_to_string(instr.first_op));
         break;
+    case JALR:
+        fprintf(output, "\tjalr\t%s\nnop\n", reg_to_string(instr.first_op));
+        break;
     case BEQ:
         if(instr.third_op < 0)
         {
@@ -338,6 +350,12 @@ void write_instr(Instruction instr)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
+    case SUBIU:
+        fprintf(output, "\tsubiu\t%s,%s,%d\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , instr.third_op);
+        break;
     case ADDI:
         fprintf(output, "\taddi\t%s,%s,%d\n"
                 , reg_to_string(instr.first_op)
@@ -372,11 +390,33 @@ void write_instr(Instruction instr)
             fprintf(output, "\tmflo\t%s\n"
                     , reg_to_string(instr.first_op));
         break;
+    case DIVI:
+    case REMI:
+        fprintf(output, "\tdiv\t%s,%s,%d\n"
+                , reg_to_string($0)
+                , reg_to_string(instr.second_op)
+                , instr.third_op);
+        fprintf(output, "\tteq\t%d,%s\n"
+                , instr.third_op
+                , reg_to_string($0));
+        if(instr.code == REM)
+            fprintf(output, "\tmfhi\t%s\n"
+                    , reg_to_string(instr.first_op));
+        else
+            fprintf(output, "\tmflo\t%s\n"
+                    , reg_to_string(instr.first_op));
+        break;
     case OR:
         fprintf(output, "\tor\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
+        break;
+    case ORI:
+        fprintf(output, "\tori\t%s,%s,%d\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , instr.third_op);
         break;
     case XOR:
         fprintf(output, "\txor\t%s,%s,%s\n"
@@ -384,11 +424,23 @@ void write_instr(Instruction instr)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
         break;
+    case XORI:
+        fprintf(output, "\txori\t%s,%s,%d\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , instr.third_op);
+        break;
     case AND:
         fprintf(output, "\tand\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
+        break;
+    case ANDI:
+        fprintf(output, "\tandi\t%s,%s,%d\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , instr.third_op);
         break;
     case SLL:
         fprintf(output, "\tsll\t%s,%s,%d\n"
@@ -681,8 +733,9 @@ cycle:
                 break;
             case MEM:
                 code_instr[curCode++] = create_instr(LA_, val_to_reg(&t), (int)(char*)val->value.pointer, 0);
-                code_instr[curCode++] = create_instr(LW, val_to_reg(&t)
-                                                       , val_to_reg(&t), 0);
+                if(cur_type >= LINT && cur_type <= LFLOAT)
+                    code_instr[curCode++] = create_instr(LW, val_to_reg(&t)
+                                                           , val_to_reg(&t), 0);
                 break;
             case OTHER:
             case ARG:
@@ -726,6 +779,7 @@ ValueEntry* pop()
                 ret = copy_value_entry(declarations[op_stack[op_sp].value.integer]);
                 mips_identref[op_stack[op_sp].value.integer] = ret;
             }
+            cur_type = type_from_identref(op_stack[op_sp].value.integer);
             if(ret->emplacement != STATIC)
                 load_value(ret);
             break;
@@ -763,8 +817,22 @@ ValueEntry* pop()
             code_instr[curCode++] = create_instr(LW, val_to_reg(ret), val_to_reg(ret), 0);
         }
             break;
+        case TCall1:
         case TCall2:
-            code_instr[curCode++] = create_instr(JAL, (int)(char*)op_stack[op_sp].value.pointer, 0, 0);
+            if(c == TCall1)
+                if(mips_identref[op_stack[op_sp].value.integer]
+                        && mips_identref[op_stack[op_sp].value.integer]->emplacement != GARBAGE
+                        && mips_identref[op_stack[op_sp].value.integer]->emplacement != STACK
+                        && mips_identref[op_stack[op_sp].value.integer]->emplacement != MEM)
+                    code_instr[curCode++] = create_instr(JALR, val_to_reg(mips_identref[op_stack[op_sp].value.integer]), 0, 0);
+                else
+                {
+                    ValueEntry *t = copy_value_entry(declarations[op_stack[op_sp].value.integer]);
+                    load_value(t);
+                    code_instr[curCode++] = create_instr(JALR, val_to_reg(t), 0, 0);
+                }
+            else
+                code_instr[curCode++] = create_instr(JAL, (int)(char*)op_stack[op_sp].value.pointer, 0, 0);
             had_func_call = 1;
             drop_temp_regs();
             ret = &all_values[all_values_sp++];
@@ -867,6 +935,10 @@ ValueEntry *eval_dynamic()
                     code_instr[curCode++] = create_instr(LI_, $v0, 1, 0);
                     code_instr[curCode++] = create_instr(SYSCALL, 0, 0, 0);
                     break;
+                case LFLOAT:
+                    break;
+                case LCHAR:
+                    break;
                 default:
                     break;
                 }
@@ -951,43 +1023,73 @@ ValueEntry *process_assign(int code)
             {
             case REMASS:
             case REMASSV:
-                code_instr[curCode++] = create_instr(REM, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                if(a->emplacement == STATIC)
+                    code_instr[curCode++] = create_instr(REMI, val_to_reg(t), val_to_reg(t), a->value.integer);
+                else
+                    code_instr[curCode++] = create_instr(REM, val_to_reg(t), val_to_reg(t), val_to_reg(a));
                 break;
             case SHLASS:
             case SHLASSV:
-                code_instr[curCode++] = create_instr(SLLV, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                if(a->emplacement == STATIC)
+                    code_instr[curCode++] = create_instr(SLL, val_to_reg(t), val_to_reg(t), a->value.integer);
+                else
+                    code_instr[curCode++] = create_instr(SLLV, val_to_reg(t), val_to_reg(t), val_to_reg(a));
                 break;
             case SHRASS:
             case SHRASSV:
-                code_instr[curCode++] = create_instr(SRAV, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                if(a->emplacement == STATIC)
+                    code_instr[curCode++] = create_instr(SRA, val_to_reg(t), val_to_reg(t), a->value.integer);
+                else
+                    code_instr[curCode++] = create_instr(SRAV, val_to_reg(t), val_to_reg(t), val_to_reg(a));
                 break;
             case ANDASS:
             case ANDASSV:
+                if(a->emplacement == STATIC)
+                    code_instr[curCode++] = create_instr(ANDI, val_to_reg(t), val_to_reg(t), a->value.integer);
+                else
                 code_instr[curCode++] = create_instr(AND, val_to_reg(t), val_to_reg(t), val_to_reg(a));
                 break;
             case EXORASS:
             case EXORASSV:
-                code_instr[curCode++] = create_instr(XOR, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                if(a->emplacement == STATIC)
+                    code_instr[curCode++] = create_instr(XORI, val_to_reg(t), val_to_reg(t), a->value.integer);
+                else
+                    code_instr[curCode++] = create_instr(XOR, val_to_reg(t), val_to_reg(t), val_to_reg(a));
                 break;
             case ORASS:
             case ORASSV:
-                code_instr[curCode++] = create_instr(OR, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                if(a->emplacement == STATIC)
+                    code_instr[curCode++] = create_instr(ORI, val_to_reg(t), val_to_reg(t), a->value.integer);
+                else
+                    code_instr[curCode++] = create_instr(OR, val_to_reg(t), val_to_reg(t), val_to_reg(a));
                 break;
             case PLUSASS:
             case PLUSASSV:
-                code_instr[curCode++] = create_instr(ADDU, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                if(a->emplacement == STATIC)
+                    code_instr[curCode++] = create_instr(ADDIU, val_to_reg(t), val_to_reg(t), a->value.integer);
+                else
+                    code_instr[curCode++] = create_instr(ADDU, val_to_reg(t), val_to_reg(t), val_to_reg(a));
                 break;
             case MINUSASS:
             case MINUSASSV:
-                code_instr[curCode++] = create_instr(SUBU, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                if(a->emplacement == STATIC)
+                    code_instr[curCode++] = create_instr(SUBIU, val_to_reg(t), val_to_reg(t), a->value.integer);
+                else
+                    code_instr[curCode++] = create_instr(SUBU, val_to_reg(t), val_to_reg(t), val_to_reg(a));
                 break;
             case MULTASS:
             case MULTASSV:
-                code_instr[curCode++] = create_instr(MUL, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                if(a->emplacement == STATIC)
+                    code_instr[curCode++] = create_instr(MULI, val_to_reg(t), val_to_reg(t), a->value.integer);
+                else
+                    code_instr[curCode++] = create_instr(MUL, val_to_reg(t), val_to_reg(t), val_to_reg(a));
                 break;
             case DIVASS:
             case DIVASSV:
-                code_instr[curCode++] = create_instr(DIV, val_to_reg(t), val_to_reg(t), val_to_reg(a));
+                if(a->emplacement == STATIC)
+                    code_instr[curCode++] = create_instr(DIVI, val_to_reg(t), val_to_reg(t), a->value.integer);
+                else
+                    code_instr[curCode++] = create_instr(DIV, val_to_reg(t), val_to_reg(t), val_to_reg(a));
                 break;
             default:
                 break;
@@ -1300,6 +1402,13 @@ void process_switch()
     curTree++;
     start_track_changes();
 
+    /* TODO исправить переход в случае "проваливающегося" case, т.е.:
+        case 5:
+        ...
+        // нет break;
+        case 15:
+        ...
+        break;  */
     while(tree[curTree] != TEnd)
     {
         ValueEntry *res;
@@ -1312,7 +1421,7 @@ void process_switch()
             process_block();
             res = eval_dynamic();
         }
-        //  TODO восстанавливать ТОЛЬКО после break
+        /* TODO восстанавливать ТОЛЬКО после break */
         restore_from_diff();
         if(tree[curTree] == TDefault)
             is_def = 1;
@@ -1372,7 +1481,7 @@ void process_declaration(int old_val_sp)
                     data.value = eval_static();
                 }
                 data.name = name_from_identref(identref);
-                data.type = LINT;
+                data.type = type_from_identref(identref);
                 if(level)
                 {
                     if (initref)
@@ -1441,8 +1550,8 @@ void process_declaration(int old_val_sp)
                     }
                 }
                 data.size = size;
-                data.type = ROWOFINT;
                 data.name = name_from_identref(identref);
+                data.type = type_from_identref(identref);
                 if(level)
                 {
                     val->emplacement = STACK;
@@ -1482,8 +1591,14 @@ void process_function()
 {
     int identref = tree[curTree++], args, sp_add_code;
     int i;
+    ValueEntry *func = &all_values[all_values_sp++];
     curTree++;
     code_instr[curCode++] = create_instr(LABEL, name_from_identref(identref), 0, 0);
+
+    /* заполнить определение */
+    func->emplacement = MEM;
+    func->value.pointer = name_from_identref(identref);
+    declarations[identref] = func;
 
     /* размер стэка */
     val_sp = 0;
@@ -1495,14 +1610,16 @@ void process_function()
         ValueEntry *val = &all_values[all_values_sp++];
         val->emplacement = ARG;
         val->value.integer = i;
-        declarations[tree[curTree++]] = val;
+        mips_identref[tree[curTree]] = declarations[tree[curTree]] = val;
+        ++curTree;
     }
     for(i = 0; i < args - 4; ++i)
     {
         ValueEntry *val = &all_values[all_values_sp++];
         val->emplacement = STACK;
         val->value.integer = val_sp++;
-        declarations[tree[curTree++]] = val;
+        mips_identref[tree[curTree]] = declarations[tree[curTree]] = val;
+        ++curTree;
     }
     curTree++;
     val_sp += 2;
@@ -1612,9 +1729,17 @@ void process_expression()
             }
             break;
         case TCall2:
-            oper.code = TCall2;
-            oper.value.pointer = name_from_identref(-tree[curTree++]);
-            op_sp = 0;
+            if(declarations[-tree[curTree]]->emplacement == MEM)
+            {
+                oper.code = TCall2;
+                oper.value.pointer = name_from_identref(-tree[curTree++]);
+            }
+            else
+            {
+                oper.code = TCall1;
+                oper.value.integer = -tree[curTree++];
+            }
+            --op_sp;
             op_stack[op_sp++] = oper;
             break;
         case TPrint:

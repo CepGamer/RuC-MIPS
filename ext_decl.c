@@ -1059,7 +1059,7 @@ void function_definition()
         else
         {
             repr = -repr;
-            toidentab(-1);
+            totree(toidentab(-1));
         }
     }
     block(0);
