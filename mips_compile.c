@@ -13,9 +13,12 @@ FILE *out_mips;
 char *temp_label = "$label%d";
 int curTempLabel;
 
+char *temp_data = "$data_%d";
+int curTempData;
+
 /* регистры аргументов */
 int arg_regs_count = 4;
-ValueEntry *arg_regs[4];
+ValueEntry *arg_regs[4] = {0};
 /* временные регистры */
 int temp_regs_count = 10;
 ValueEntry *temp_regs[10] = {0};
@@ -23,6 +26,10 @@ ValueDiff old_temp_regs[10] = {0};
 /* сохранённые регистры */
 int saved_regs_count = 8;
 ValueEntry *saved_regs[8] = {0};
+/* временные регистры с плавающей запятой */
+int float_temp_regs_count = 16;
+ValueEntry *float_temp_regs[16] = {0};
+ValueDiff old_float_temp_regs[16] = {0};
 
 /* стэк операций */
 Operation op_stack[100] = {0};
@@ -73,6 +80,17 @@ ValueEntry *copy_value_entry(ValueEntry *entry)
     ValueEntry *ret = &all_values[all_values_sp++];
 
     assign_ValueEntry(ret, entry);
+    return ret;
+}
+
+IdentEntry create_entry(char *name, int size, int type, Value value, int label)
+{
+    IdentEntry ret;
+    ret.name = name;
+    ret.size = size;
+    ret.type = type;
+    ret.value = value;
+    ret.label = label;
     return ret;
 }
 
@@ -161,6 +179,8 @@ Registers val_to_reg(ValueEntry *val)
     case TEMP:
         if(val->value.integer < 8)
             return $t0 + val->value.integer;
+        else if(val->value.integer > 10)
+            return val->value.integer;
         else
             return $t8 + val->value.integer - 8;
         break;
@@ -176,9 +196,20 @@ Registers val_to_reg(ValueEntry *val)
 
 char * reg_to_string(Registers reg)
 {
+    static char fp_st[3][5];
+    static int ptr = 0;
+
+    if(reg >= $f0 && reg <= $f31)
+    {
+        sprintf(fp_st[ptr], "$f%d", reg - $f0);
+        ptr = (ptr + 1) % 3;
+        return fp_st[ptr == 0 ? 2 : ptr - 1];
+    }
     switch (reg) {
     case $0:
         return "$0";
+    case $at:
+        return "$at";
     case $v0:
         return "$v0";
     case $v1:
@@ -368,6 +399,18 @@ void write_instr(Instruction instr)
                 , reg_to_string(instr.second_op)
                 , instr.third_op);
         break;
+    case ADDS:
+        fprintf(output, "\tadd.s\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        break;
+    case SUBS:
+        fprintf(output, "\tsub.s\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        break;
     case MUL:
         fprintf(output, "\tmul\t%s,%s,%s\n"
                 , reg_to_string(instr.first_op)
@@ -405,6 +448,18 @@ void write_instr(Instruction instr)
         else
             fprintf(output, "\tmflo\t%s\n"
                     , reg_to_string(instr.first_op));
+        break;
+    case MULS:
+        fprintf(output, "\tmul.s\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
+        break;
+    case DIVS:
+        fprintf(output, "\tdiv.s\t%s,%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , reg_to_string(instr.third_op));
         break;
     case OR:
         fprintf(output, "\tor\t%s,%s,%s\n"
@@ -514,10 +569,45 @@ void write_instr(Instruction instr)
                 , reg_to_string(instr.second_op)
                 , instr.third_op);
         break;
-    case MOVE:
-        fprintf(output, "\tmove\t%s,%s\n"
+    case CEQS:
+        fprintf(output, "\tc.eq.s\t%s,%s\n"
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op));
+        break;
+    case CLES:
+        fprintf(output, "\tc.le.s\t%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op));
+        break;
+    case CLTS:
+        fprintf(output, "\tc.lt.s\t%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op));
+        break;
+    case MOVE:
+        /* между целочисленными регистрами */
+        if(instr.first_op <= $ra && instr.second_op <= $ra)
+            fprintf(output, "\tmove\t%s,%s\n"
+                    , reg_to_string(instr.first_op)
+                    , reg_to_string(instr.second_op));
+
+        /* из целочисленных в регистры с плавающей запятой */
+        else if(instr.first_op >= $f0 && instr.second_op <= $ra)
+            fprintf(output, "\tmtc1\t%s,%s\n"
+                    , reg_to_string(instr.second_op)
+                    , reg_to_string(instr.first_op));
+
+        /* из регистров с плавающей запятой в целочисленные */
+        else if(instr.first_op <= $ra && instr.second_op >= $f0)
+            fprintf(output, "\tmfc1\t%s,%s\n"
+                    , reg_to_string(instr.first_op)
+                    , reg_to_string(instr.second_op));
+
+        /* между регистрами с плавающей запятой */
+        else
+            fprintf(output, "\tmove\t%s,%s\n"
+                    , reg_to_string(instr.first_op)
+                    , reg_to_string(instr.second_op));
         break;
     case NEGU:
         fprintf(output, "\tnegu\t%s,%s\n"
@@ -536,15 +626,41 @@ void write_instr(Instruction instr)
                 , temp_name);
         break;
     case LW:
-        fprintf(output, "\tlw\t%s,%d(%s)\n"
+        if(instr.second_op == temp_data)
+        {
+            fprintf(output, "\tlw\t%s,", reg_to_string(instr.first_op));
+            fprintf(output, temp_data, instr.third_op);
+            fprintf(output, "\n");
+        }
+        else
+            fprintf(output, "\tlw\t%s,%d(%s)\n"
+                    , reg_to_string(instr.first_op)
+                    , instr.third_op
+                    , reg_to_string(instr.second_op));
+        break;
+    case SW:
+        if(instr.first_op <= $ra)
+        {
+            fprintf(output, "\tsw\t%s,%d(%s)\n"
+                    , reg_to_string(instr.first_op)
+                    , instr.third_op
+                    , reg_to_string(instr.second_op));
+            break;
+        }
+    case SWC1:
+        fprintf(output, "\tswc1\t%s,%d(%s)\n"
                 , reg_to_string(instr.first_op)
                 , instr.third_op
                 , reg_to_string(instr.second_op));
         break;
-    case SW:
-        fprintf(output, "\tsw\t%s,%d(%s)\n"
+    case MOVT:
+        fprintf(output, "\tmovt\t%s,%s\n"
                 , reg_to_string(instr.first_op)
-                , instr.third_op
+                , reg_to_string(instr.second_op));
+        break;
+    case MOVF:
+        fprintf(output, "\tmovf\t%s,%s\n"
+                , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op));
         break;
     case SYSCALL:
@@ -557,20 +673,30 @@ void write_instr(Instruction instr)
 
 void write_data(IdentEntry data)
 {
-    fill_temp_name(data.name);
-    fprintf(output, "%s:\t", temp_name);
+    if(data.name == temp_data)
+    {
+        fprintf(output, temp_data, data.label);
+        fprintf(output, ":\t");
+    }
+    else
+    {
+        fill_temp_name(data.name);
+        fprintf(output, "%s:\t", temp_name);
+    }
     switch(data.type)
     {
     int i;
     case LINT:
+    case LFLOAT:
         fprintf(output, ".word\t%d\n", data.value.integer);
         break;
-    case LFLOAT:
-        break;
     case LCHAR:
+        fprintf(output, ".byte\t%d\n", data.value.character);
         break;
     case ROWOFINT:
     case ROWROWOFINT:
+    case ROWOFFLOAT:
+    case ROWROWOFFLOAT:
         if(data.value.pointer)
         {
             fprintf(output, ".word\t");
@@ -580,9 +706,6 @@ void write_data(IdentEntry data)
         }
         else
             fprintf(output, ".space\t%d\n", data.size * sizeof(int));
-        break;
-    case ROWOFFLOAT:
-    case ROWROWOFFLOAT:
         break;
     case ROWOFCHAR:
     case ROWROWOFCHAR:
@@ -715,46 +838,86 @@ Value eval_static()
 void load_value(ValueEntry *val)
 {
     int i = 0;
-    static int nxt = 0;
+    static int nxt = 0, nxt_float = 0;
     if(val->emplacement == TEMP || val->emplacement == SAVED || val->emplacement == IDENT_)
         return;
 
-cycle:
-    for(i; i < temp_regs_count; ++i)
-        if(!temp_regs[i] || temp_regs[i]->emplacement != TEMP)
-        {
-            ValueEntry t;
-            t.emplacement = TEMP;
-            t.value.integer = i;
-            switch(val->emplacement)
+    if(cur_type == LFLOAT)
+    {
+    cycle_float:
+        for(i; i < float_temp_regs_count; ++i)
+            if(!float_temp_regs[i] || float_temp_regs[i]->emplacement != TEMP)
             {
-            case STATIC:
-                code_instr[curCode++] = create_instr(ADDIU, val_to_reg(&t), $0, val->value.integer);
-                break;
-            case MEM:
-                code_instr[curCode++] = create_instr(LA_, val_to_reg(&t), (int)(char*)val->value.pointer, 0);
-                if(cur_type >= LINT && cur_type <= LFLOAT)
-                    code_instr[curCode++] = create_instr(LW, val_to_reg(&t)
-                                                           , val_to_reg(&t), 0);
-                break;
-            case OTHER:
-            case ARG:
-                code_instr[curCode++] = create_instr(MOVE, val_to_reg(&t), val_to_reg(val), 0);
-                break;
-            case STACK:
-                code_instr[curCode++] = create_instr(LW, val_to_reg(&t), $sp, (val_sp - val->value.integer) * 4);
-                break;
-            default:
-                break;
+                ValueEntry t;
+                t.emplacement = TEMP;
+                t.value.integer = $f1 + i * 2;
+                switch(val->emplacement)
+                {
+                case STATIC:
+                    code_instr[curCode++] = create_instr(ADDIU, val_to_reg(&t), $0, val->value.integer);
+                    break;
+                case MEM:
+                    data_entries[curData++] = create_entry(temp_data, 0, LFLOAT, val->value, curTempData);
+                    code_instr[curCode++] = create_instr(LW, val_to_reg(&t), temp_data, curTempData++);
+                    break;
+                case OTHER:
+                case ARG:
+                    code_instr[curCode++] = create_instr(MOVE, val_to_reg(&t), val_to_reg(val), 0);
+                    break;
+                case STACK:
+                    code_instr[curCode++] = create_instr(LW, val_to_reg(&t), $sp, (val_sp - val->value.integer) * 4);
+                    break;
+                default:
+                    break;
+                }
+                val->emplacement = TEMP;
+                val->value.integer = $f1 + i * 2;
+                float_temp_regs[i] = val;
+                return;
             }
-            val->emplacement = TEMP;
-            val->value.integer = i;
-            temp_regs[i] = val;
-            return;
-        }
-    nxt %= 10;
-    temp_regs[i = nxt++]->emplacement = GARBAGE;
-    goto cycle;
+        nxt_float %= float_temp_regs_count;
+        float_temp_regs[i = nxt_float++]->emplacement = GARBAGE;
+        goto cycle_float;
+    }
+    else
+    {
+    cycle:
+        for(i; i < temp_regs_count; ++i)
+            if(!temp_regs[i] || temp_regs[i]->emplacement != TEMP)
+            {
+                ValueEntry t;
+                t.emplacement = TEMP;
+                t.value.integer = i;
+                switch(val->emplacement)
+                {
+                case STATIC:
+                    code_instr[curCode++] = create_instr(ADDIU, val_to_reg(&t), $0, val->value.integer);
+                    break;
+                case MEM:
+                    if(cur_type >= LINT && cur_type <= LFLOAT)
+                        code_instr[curCode++] = create_instr(LW, val_to_reg(&t), (int)(char*)val->value.pointer, 0);
+                    else
+                        code_instr[curCode++] = create_instr(LA_, val_to_reg(&t), (int)(char*)val->value.pointer, 0);
+                    break;
+                case OTHER:
+                case ARG:
+                    code_instr[curCode++] = create_instr(MOVE, val_to_reg(&t), val_to_reg(val), 0);
+                    break;
+                case STACK:
+                    code_instr[curCode++] = create_instr(LW, val_to_reg(&t), $sp, (val_sp - val->value.integer) * 4);
+                    break;
+                default:
+                    break;
+                }
+                val->emplacement = TEMP;
+                val->value.integer = i;
+                temp_regs[i] = val;
+                return;
+            }
+        nxt %= temp_regs_count;
+        temp_regs[i = nxt++]->emplacement = GARBAGE;
+        goto cycle;
+    }
 }
 
 ValueEntry* pop()
@@ -922,26 +1085,29 @@ ValueEntry *eval_dynamic()
                 code_instr[curCode++] = create_instr(J, -1, break_label, 0);
                 break;
             case TPrint:
+                if(prev->emplacement != STATIC)
+                {
+                    load_value(prev);
+                    code_instr[curCode++] = create_instr(MOVE, $a0, val_to_reg(prev), 0);
+                }
+                else
+                    code_instr[curCode++] = create_instr(ADDIU, $a0, $0, prev->value.integer);
                 switch (op_stack[op_sp].value.integer)
                 {
                 case LINT:
-                    if(prev->emplacement != STATIC)
-                    {
-                        load_value(prev);
-                        code_instr[curCode++] = create_instr(MOVE, $a0, val_to_reg(prev), 0);
-                    }
-                    else
-                        code_instr[curCode++] = create_instr(ADDIU, $a0, $0, prev->value.integer);
                     code_instr[curCode++] = create_instr(LI_, $v0, 1, 0);
-                    code_instr[curCode++] = create_instr(SYSCALL, 0, 0, 0);
                     break;
                 case LFLOAT:
+                    code_instr[curCode++] = create_instr(MOVE, $f12, $a0, 0);
+                    code_instr[curCode++] = create_instr(LI_, $v0, 2, 0);
                     break;
                 case LCHAR:
+                    code_instr[curCode++] = create_instr(LI_, $v0, 11, 0);
                     break;
                 default:
                     break;
                 }
+                code_instr[curCode++] = create_instr(SYSCALL, 0, 0, 0);
                 break;
             default:
                 ++op_sp;
@@ -1206,6 +1372,13 @@ ValueEntry *process_binop(int code)
     }
     load_value(a);
     load_value(b);
+    if(code >= EQEQR && code <= LGER)
+    {
+        ret = &all_values[all_values_sp];
+        ret->emplacement = GARBAGE;
+        cur_type = LINT;
+        load_value(ret);
+    }
     switch (code)
     {
     case LOGAND:
@@ -1259,6 +1432,49 @@ ValueEntry *process_binop(int code)
         break;
     case LGE:
         code_instr[curCode++] = create_instr(SGE, val_to_reg(a), val_to_reg(b), val_to_reg(a));
+        break;
+    /* плавающая запятая */
+    case EQEQR:
+        code_instr[curCode++] = create_instr(CEQS, val_to_reg(a), val_to_reg(b), 0);
+        code_instr[curCode++] = create_instr(ADDIU, $at, $0, 1);
+        code_instr[curCode++] = create_instr(MOVT, val_to_reg(ret), $at, 0);
+        break;
+    case NOTEQR:
+        code_instr[curCode++] = create_instr(CEQS, val_to_reg(a), val_to_reg(b), 0);
+        code_instr[curCode++] = create_instr(ADDIU, $at, $0, 1);
+        code_instr[curCode++] = create_instr(MOVF, val_to_reg(ret), $at, 0);
+        break;
+    case LLTR:
+        code_instr[curCode++] = create_instr(CLTS, val_to_reg(a), val_to_reg(b), 0);
+        code_instr[curCode++] = create_instr(ADDIU, $at, $0, 1);
+        code_instr[curCode++] = create_instr(MOVT, val_to_reg(ret), $at, 0);
+        break;
+    case LGTR:
+        code_instr[curCode++] = create_instr(CLES, val_to_reg(a), val_to_reg(b), 0);
+        code_instr[curCode++] = create_instr(ADDIU, $at, $0, 1);
+        code_instr[curCode++] = create_instr(MOVF, val_to_reg(ret), $at, 0);
+        break;
+    case LLER:
+        code_instr[curCode++] = create_instr(CLES, val_to_reg(a), val_to_reg(b), 0);
+        code_instr[curCode++] = create_instr(ADDIU, $at, $0, 1);
+        code_instr[curCode++] = create_instr(MOVT, val_to_reg(ret), $at, 0);
+        break;
+    case LGER:
+        code_instr[curCode++] = create_instr(CLTS, val_to_reg(a), val_to_reg(b), 0);
+        code_instr[curCode++] = create_instr(ADDIU, $at, $0, 1);
+        code_instr[curCode++] = create_instr(MOVF, val_to_reg(ret), $at, 0);
+        break;
+    case LPLUSR:
+        code_instr[curCode++] = create_instr(ADDS, val_to_reg(a), val_to_reg(b), val_to_reg(a));
+        break;
+    case LMINUSR:
+        code_instr[curCode++] = create_instr(SUBS, val_to_reg(a), val_to_reg(b), val_to_reg(a));
+        break;
+    case LMULTR:
+        code_instr[curCode++] = create_instr(MULS, val_to_reg(a), val_to_reg(b), val_to_reg(a));
+        break;
+    case LDIVR:
+        code_instr[curCode++] = create_instr(DIVS, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     }
 end:
@@ -1852,7 +2068,7 @@ void compile_mips()
     int i;
     out_mips = fopen(outfile, "w");
     curTree = curData = curInit = curCode = curChangedId = 0;
-    curTempLabel = 0;
+    curTempData = curTempLabel = 0;
     op_sp = val_sp = all_values_sp = 0;
     track_changes = 0;
     propagate_constants = 1;

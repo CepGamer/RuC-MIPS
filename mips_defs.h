@@ -16,7 +16,13 @@ typedef enum
     $s0, $s1, $s2, $s3, $s4, $s5, $s6, $s7,
     $t8, $t9,
     $k0, $k1,
-    $gp, $sp, $fp, $ra
+    $gp, $sp, $fp, $ra,
+    /* регистры с плавающей запятой */
+    $f0, $f1, $f2, $f3, $f4, $f5, $f6, $f7,
+    $f8, $f9, $f10, $f11, $f12, $f13, $f14, $f15,
+    $f16, $f17, $f18, $f19, $f20, $f21, $f22, $f23,
+    $f24, $f25, $f26, $f27, $f28, $f29, $f30, $f31
+
 } Registers;
 
 typedef enum
@@ -36,6 +42,7 @@ typedef enum
     LA_,
     LW,
     SW,
+    SWC1,
     /* унарные операции */
     NEGU,
     /* бинарные операции */
@@ -48,6 +55,9 @@ typedef enum
     ADDI,
     ADDIU,
 
+    ADDS,
+    SUBS,
+
     /* умножение и деление */
     MUL,
     MULI,
@@ -55,6 +65,9 @@ typedef enum
     DIVI,
     REM,
     REMI,
+
+    MULS,
+    DIVS,
 
     /* логические */
     OR,
@@ -76,8 +89,15 @@ typedef enum
     SEQI,
     SNE,
     SNEI,
+
+    /** сравнение с плавающей запятой */
+    CEQS,
+    CLES,
+    CLTS,
     /* прочие */
     MOVE,
+    MOVT,
+    MOVF,
     SYSCALL
 } Instructions;
 
@@ -115,6 +135,7 @@ typedef struct
     int type;
     int size;
     Value value;
+    int label;
 } IdentEntry;
 
 typedef struct
