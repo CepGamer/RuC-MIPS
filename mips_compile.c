@@ -68,6 +68,12 @@ int continue_label = -1, break_label = -1;
 int fp_codes[100];
 int fp_codes_ptr;
 
+ValueEntry *possible_saved[10 /* temp_regs_count */];
+int possible_saved_instr[10 /* temp_regs_count */];
+int used_in_cycle[10 /* temp_regs_count */];
+int possible_saved_ptr;
+int try_save;
+
 int propagate_constants = 1;
 int delayed_slot = 1;
 
@@ -266,8 +272,32 @@ void drop_temp_regs()
 {
     int i = 0;
     for(i; i < temp_regs_count; ++i)
+    {
         if(temp_regs[i])
             temp_regs[i]->emplacement = GARBAGE;
+        used_in_cycle[i] = 0;
+    }
+}
+
+void save_instr(ValueEntry *val, int code)
+{
+    if(val->emplacement == TEMP && used_in_cycle[val->value.integer])
+        return;
+    val->flags |= POSSIBLY_SAVED;
+    possible_saved[possible_saved_ptr] = val;
+    possible_saved_instr[possible_saved_ptr++] = code;
+}
+
+void save_possibles(int saved_code)
+{
+    int i = 0;
+    for(i; i < possible_saved_ptr; ++i)
+        if(possible_saved[i]
+                && possible_saved[i]->emplacement != GARBAGE)
+        {
+            code_instr[saved_code + i] = code_instr[possible_saved_instr[i]];
+            code_instr[possible_saved_instr[i]].code = DELETED;
+        }
 }
 
 int can_insert_delayed_slot(Instruction jump, Instruction prev)
@@ -985,6 +1015,8 @@ void load_value(ValueEntry *val)
                 default:
                     break;
                 }
+                if(try_save && val->emplacement != GARBAGE)
+                    used_in_cycle[i] = 1;
                 val->emplacement = TEMP;
                 val->value.integer = i;
                 temp_regs[i] = val;
@@ -1034,14 +1066,25 @@ ValueEntry* pop()
         case TSliceident:
         {
             int identref = op_stack[op_sp].value.integer;
-            ret = &all_values[all_values_sp++];
-            ret->emplacement = GARBAGE;
-            load_value(ret);
-            if(declarations[identref]->emplacement == MEM)
-                code_instr[curCode++] = create_instr(LA_, val_to_reg(ret), name_from_identref(identref), 0);
+            if(mips_identref[identref]
+                    && mips_identref[identref]->emplacement != GARBAGE)
+                ret = mips_identref[identref];
             else
-                code_instr[curCode++] = create_instr(ADDIU, val_to_reg(ret), $sp
-                                                     , (val_sp - declarations[identref]->value.integer) * 4);
+            {
+                ret = &all_values[all_values_sp++];
+                ret->emplacement = GARBAGE;
+                load_value(ret);
+                if(declarations[identref]->emplacement == MEM)
+                    code_instr[curCode++] = create_instr(LA_, val_to_reg(ret), name_from_identref(identref), 0);
+                else
+                    code_instr[curCode++] = create_instr(ADDIU, val_to_reg(ret), $sp
+                                                         , (val_sp - declarations[identref]->value.integer) * 4);
+                mips_identref[identref] = ret;
+                if(try_save && possible_saved_ptr < temp_regs_count)
+                {
+                    save_instr(ret, curCode - 1);
+                }
+            }
         }
             break;
         case TAddrtoval:
@@ -1056,8 +1099,9 @@ ValueEntry* pop()
             tmp = a;
             load_value(ret);
             code_instr[curCode++] = create_instr(SLL, val_to_reg(tmp), val_to_reg(tmp), 2);
-            code_instr[curCode++] = create_instr(ADDU, val_to_reg(ret), val_to_reg(ret), val_to_reg(tmp));
-            code_instr[curCode++] = create_instr(LW, val_to_reg(ret), val_to_reg(ret), 0);
+            code_instr[curCode++] = create_instr(ADDU, val_to_reg(tmp), val_to_reg(ret), val_to_reg(tmp));
+            code_instr[curCode++] = create_instr(LW, val_to_reg(tmp), val_to_reg(tmp), 0);
+            ret = tmp;
         }
             break;
         case TCall1:
@@ -1346,7 +1390,6 @@ ValueEntry *process_assign(int code)
             default:
                 break;
             }
-            a->emplacement = GARBAGE;
             a = t;
         }
         assign_to_ValueEntry(b, a);
@@ -1771,11 +1814,13 @@ void process_if()
 
 void process_while()
 {
-    int _break_label = break_label, _continue_label = continue_label;
+    int _break_label = break_label, _continue_label = continue_label, saved_code = curCode;
     ValueEntry *tmp;
     break_label = curTempLabel++, continue_label = curTempLabel++;
 
     propagate_constants = 0;
+    try_save = 1;
+    curCode += 10;
     drop_temp_regs();
 
     /* условие */
@@ -1792,6 +1837,8 @@ void process_while()
 
     break_label = _break_label, continue_label = _continue_label;
     propagate_constants = 1;
+    save_possibles(saved_code);
+    try_save = 0;
 }
 
 void process_do_while()
@@ -2280,6 +2327,7 @@ void compile_mips()
     curTempData = curTempLabel = 0;
     op_sp = val_sp = all_values_sp = 0;
     track_changes = 0;
+    try_save = 0;
     propagate_constants = 1;
     do
     {

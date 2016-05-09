@@ -124,6 +124,7 @@ typedef enum
     UPDATESINLOOP   = 0x01,
     CONSTANT        = 0x02,
     PROTECTED       = 0x04,
+    POSSIBLY_SAVED  = 0x08,
     ALL             = 0xffff
 } Flags;
 
