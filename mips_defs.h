@@ -131,6 +131,14 @@ typedef union {
 
 typedef struct
 {
+    Instructions code;
+    int first_op;
+    int second_op;
+    int third_op;
+} Instruction;
+
+typedef struct
+{
     char * name;
     int type;
     int size;
@@ -143,6 +151,7 @@ typedef struct
     Emplacement emplacement;
     Value value;
     int flags;
+    Instruction *previous_save;
 } ValueEntry;
 
 typedef struct
@@ -156,14 +165,6 @@ typedef struct
     ValueEntry old;
     ValueEntry *ident;
 } ValueDiff;
-
-typedef struct
-{
-    Instructions code;
-    int first_op;
-    int second_op;
-    int third_op;
-} Instruction;
 
 typedef struct
 {
