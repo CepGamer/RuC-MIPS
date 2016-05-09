@@ -938,8 +938,8 @@ ValueEntry* pop()
             ret->emplacement = STATIC;
             break;
         case TIdenttoval:
-            if(propagate_constants
-                    && mips_identref[op_stack[op_sp].value.integer]
+            if(mips_identref[op_stack[op_sp].value.integer]
+                    && (propagate_constants || mips_identref[op_stack[op_sp].value.integer]->emplacement != STATIC)
                     && mips_identref[op_stack[op_sp].value.integer]->emplacement != GARBAGE)
                 ret = mips_identref[op_stack[op_sp].value.integer];
             else
@@ -974,10 +974,14 @@ ValueEntry* pop()
             break;
         case TAddrtoval:
         {
-            ValueEntry *tmp;
+            ValueEntry *tmp, *a;
             tmp = pop();
             ret = pop();
-            load_value(tmp);
+            a = &all_values[all_values_sp++];
+            a->emplacement = GARBAGE;
+            load_value(a);
+            code_instr[curCode++] = create_instr(MOVE, val_to_reg(a), val_to_reg(tmp), 0);
+            tmp = a;
             load_value(ret);
             code_instr[curCode++] = create_instr(SLL, val_to_reg(tmp), val_to_reg(tmp), 2);
             code_instr[curCode++] = create_instr(ADDU, val_to_reg(ret), val_to_reg(ret), val_to_reg(tmp));
@@ -1133,11 +1137,17 @@ void assign_to_ValueEntry(ValueEntry *to_ass, ValueEntry *new_val)
         code_instr[curCode++] = create_instr(LA_, val_to_reg(c), (char*)to_ass->value.pointer, 0);
         load_value(new_val);
         code_instr[curCode++] = create_instr(SW, val_to_reg(new_val), val_to_reg(c), 0);
+        if(to_ass->previous_save)
+            to_ass->previous_save->code = DELETED;
+        to_ass->previous_save = &code_instr[curCode - 1];
     }
     else if(to_ass->emplacement == STACK)
     {
         load_value(new_val);
         code_instr[curCode++] = create_instr(SW, val_to_reg(new_val), $sp, (val_sp - to_ass->value.integer) * 4);
+        if(to_ass->previous_save)
+            to_ass->previous_save->code = DELETED;
+        to_ass->previous_save = &code_instr[curCode - 1];
     }
     else if(to_ass->emplacement == ARG)
     {
@@ -1287,7 +1297,7 @@ ValueEntry *process_assign(int code)
             a->emplacement = GARBAGE;
             a = declarations[a->value.integer];
         }
-        if(!propagate_constants)
+        if(!propagate_constants && b->emplacement == STATIC)
         {
             b->emplacement = GARBAGE;
             b = copy_value_entry(a);
@@ -1412,7 +1422,10 @@ ValueEntry *process_binop(int code)
     }
     a = pop();
     if(code == LOGAND || code == LOGOR)
+    {
         curCode = old_code;
+        drop_temp_regs();
+    }
     b = pop();
     if(a->emplacement == STATIC && b->emplacement == STATIC)
     {
@@ -1540,7 +1553,6 @@ ValueEntry *process_binop(int code)
         break;
     }
 end:
-    b->emplacement = GARBAGE;
     ret = a;
     return ret;
 }
