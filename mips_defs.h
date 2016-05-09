@@ -82,9 +82,13 @@ typedef enum
     SRAV,
     /* сравнение */
     SLT,
+    SLTI,
     SGT,
+    SGTI,
     SLE,
+    SLEI,
     SGE,
+    SGEI,
     SEQ,
     SEQI,
     SNE,
@@ -152,6 +156,7 @@ typedef struct
     Value value;
     int flags;
     Instruction *previous_save;
+    int identref;
 } ValueEntry;
 
 typedef struct
