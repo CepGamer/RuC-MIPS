@@ -38,6 +38,7 @@ typedef enum
     BEQI,
     BEQZ,
     BNEZ,
+    /* чтение и запись */
     LI_,
     LA_,
     LW,
@@ -122,7 +123,7 @@ typedef enum
 {
     UPDATESINLOOP   = 0x01,
     CONSTANT        = 0x02,
-
+    PROTECTED       = 0x04,
     ALL             = 0xffff
 } Flags;
 

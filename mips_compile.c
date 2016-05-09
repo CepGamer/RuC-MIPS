@@ -270,10 +270,52 @@ void drop_temp_regs()
             temp_regs[i]->emplacement = GARBAGE;
 }
 
-void write_instr(Instruction instr)
+int can_insert_delayed_slot(Instruction jump, Instruction prev)
 {
-    if(!instr.code)
+    return (((jump.code == J || jump.code == JAL) && (prev.code))
+            || (((jump.code >= JALR && jump.code <= BNEZ && jump.code != BEQ) || jump.code == JR) && prev.first_op != jump.first_op)
+            || (jump.code == BEQ && prev.first_op != jump.first_op && prev.first_op != jump.second_op))
+            && !(prev.code >= LABEL && prev.code <= BNEZ);
+}
+
+void write_instr(int num, int is_init)
+{
+    Instruction instr, old_instr;
+    static int ins_nop = 1;
+    if(!ins_nop)
+    {
+        ins_nop = 1;
         return;
+    }
+    if(is_init)
+    {
+        instr = initialise_instr[num];
+        if(!instr.code)
+            return;
+        if(num < curInit - 1
+                && can_insert_delayed_slot(initialise_instr[num + 1], instr)
+                && delayed_slot)
+        {
+            old_instr = instr;
+            instr = initialise_instr[num + 1];
+            ins_nop = 0;
+        }
+    }
+    else
+    {
+        instr = code_instr[num];
+        if(!instr.code)
+            return;
+        if(num < curCode - 1
+                && can_insert_delayed_slot(code_instr[num + 1], instr)
+                && delayed_slot)
+        {
+            old_instr = instr;
+            instr = code_instr[num + 1];
+            ins_nop = 0;
+        }
+    }
+ins_instr:
     switch (instr.code) {
     case DELETED:
         break;
@@ -282,33 +324,31 @@ void write_instr(Instruction instr)
         {
             fprintf(output, "\tj\t");
             fprintf(output, temp_label, instr.second_op);
-            fprintf(output, "\nnop\n");
         }
         else
         {
             fill_temp_name(instr.first_op);
-            fprintf(output, "\tj\t%s\nnop\n", temp_name);
+            fprintf(output, "\tj\t%s", temp_name);
         }
         break;
     case JAL:
         fill_temp_name(instr.first_op);
-        fprintf(output, "\tjal\t%s\nnop\n", temp_name);
+        fprintf(output, "\tjal\t%s", temp_name);
         break;
     case JR:
-        fprintf(output, "\tjr\t%s\nnop\n", reg_to_string(instr.first_op));
+        fprintf(output, "\tjr\t%s", reg_to_string(instr.first_op));
         break;
     case JALR:
-        fprintf(output, "\tjalr\t%s\nnop\n", reg_to_string(instr.first_op));
+        fprintf(output, "\tjalr\t%s", reg_to_string(instr.first_op));
         break;
     case BEQ:
         if(instr.third_op < 0)
         {
             fprintf(output, "\tbeq\t%s,%s,", reg_to_string(instr.first_op), reg_to_string(instr.second_op));
             fprintf(output, temp_label, -instr.third_op);
-            fprintf(output, "\nnop\n");
         }
         else
-            fprintf(output, "\tbeq\t%s,%s,%s\nnop\n"
+            fprintf(output, "\tbeq\t%s,%s,%s"
                     , reg_to_string(instr.first_op)
                     , reg_to_string(instr.second_op)
                     , (char *)instr.third_op);
@@ -318,10 +358,9 @@ void write_instr(Instruction instr)
         {
             fprintf(output, "\tbeq\t%s,%d,", reg_to_string(instr.first_op), instr.second_op);
             fprintf(output, temp_label, instr.third_op);
-            fprintf(output, "\nnop\n");
         }
         else
-            fprintf(output, "\tbeq\t%s,%d,%s\nnop\n"
+            fprintf(output, "\tbeq\t%s,%d,%s"
                     , reg_to_string(instr.first_op)
                     , instr.second_op
                     , (char *)instr.third_op);
@@ -331,10 +370,9 @@ void write_instr(Instruction instr)
         {
             fprintf(output, "\tbeqz\t%s,", reg_to_string(instr.first_op));
             fprintf(output, temp_label, instr.third_op);
-            fprintf(output, "\nnop\n");
         }
         else
-            fprintf(output, "\tbeqz\t%s,%s\nnop\n"
+            fprintf(output, "\tbeqz\t%s,%s"
                     , reg_to_string(instr.first_op)
                     , (char *)instr.second_op);
         break;
@@ -343,10 +381,9 @@ void write_instr(Instruction instr)
         {
             fprintf(output, "\tbnez\t%s,", reg_to_string(instr.first_op));
             fprintf(output, temp_label, instr.third_op);
-            fprintf(output, "\nnop\n");
         }
         else
-            fprintf(output, "\tbnez\t%s,%s\nnop\n"
+            fprintf(output, "\tbnez\t%s,%s"
                     , reg_to_string(instr.first_op)
                     , (char *)instr.second_op);
         break;
@@ -698,6 +735,14 @@ void write_instr(Instruction instr)
     default:
         break;
     }
+    if(!ins_nop && instr.code >= J && instr.code <= BNEZ)
+    {
+        fprintf(output, "\n");
+        instr = old_instr;
+        goto ins_instr;
+    }
+    else if(instr.code >= J && instr.code <= BNEZ)
+        fprintf(output, "\nnop\n");
 }
 
 void write_data(IdentEntry data)
@@ -904,6 +949,8 @@ void load_value(ValueEntry *val)
                 float_temp_regs[i] = val;
                 return;
             }
+        if(float_temp_regs[nxt_float]->flags & PROTECTED)
+            nxt_float++;
         nxt_float %= float_temp_regs_count;
         float_temp_regs[i = nxt_float++]->emplacement = GARBAGE;
         goto cycle_float;
@@ -943,6 +990,8 @@ void load_value(ValueEntry *val)
                 temp_regs[i] = val;
                 return;
             }
+        if(float_temp_regs[nxt]->flags & PROTECTED)
+            nxt++;
         nxt %= temp_regs_count;
         temp_regs[i = nxt++]->emplacement = GARBAGE;
         goto cycle;
@@ -991,11 +1040,8 @@ ValueEntry* pop()
             if(declarations[identref]->emplacement == MEM)
                 code_instr[curCode++] = create_instr(LA_, val_to_reg(ret), name_from_identref(identref), 0);
             else
-            {
-                code_instr[curCode++] = create_instr(MOVE, val_to_reg(ret), $sp, 0);
-                code_instr[curCode++] = create_instr(ADDIU, val_to_reg(ret), val_to_reg(ret)
+                code_instr[curCode++] = create_instr(ADDIU, val_to_reg(ret), $sp
                                                      , (val_sp - declarations[identref]->value.integer) * 4);
-            }
         }
             break;
         case TAddrtoval:
@@ -2248,11 +2294,11 @@ void compile_mips()
         write_data(data_entries[i]);
 
     fprintf(output, ".text\n");
+    initialise_instr[curInit++] = create_instr(J, name_from_identref(0), 0, 0);
     for(i = 0; i < curInit; i++)
-        write_instr(initialise_instr[i]);
-    write_instr(create_instr(J, name_from_identref(0), 0, 0));
+        write_instr(i, 1);
     for(i = 0; i < curCode; i++)
-        write_instr(code_instr[i]);
+        write_instr(i, 0);
 
     fclose(output);
     return;
