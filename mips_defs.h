@@ -27,7 +27,7 @@ typedef enum
 
 typedef enum
 {
-    LABEL,
+    LABEL = 1,
     DELETED,
     /* переходы */
     J,

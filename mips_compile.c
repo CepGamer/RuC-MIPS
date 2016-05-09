@@ -19,17 +19,20 @@ int curTempData;
 /* регистры аргументов */
 int arg_regs_count = 4;
 ValueEntry *arg_regs[4] = {0};
+/* регистры аргументов с плавающей запятой */
+int float_arg_regs_count = 2;
+ValueEntry *float_arg_regs[2] = {0};
 /* временные регистры */
 int temp_regs_count = 10;
 ValueEntry *temp_regs[10] = {0};
 ValueDiff old_temp_regs[10] = {0};
-/* сохранённые регистры */
-int saved_regs_count = 8;
-ValueEntry *saved_regs[8] = {0};
 /* временные регистры с плавающей запятой */
 int float_temp_regs_count = 16;
 ValueEntry *float_temp_regs[16] = {0};
 ValueDiff old_float_temp_regs[16] = {0};
+/* сохранённые регистры */
+int saved_regs_count = 8;
+ValueEntry *saved_regs[8] = {0};
 
 /* стэк операций */
 Operation op_stack[100] = {0};
@@ -269,6 +272,8 @@ void drop_temp_regs()
 
 void write_instr(Instruction instr)
 {
+    if(!instr.code)
+        return;
     switch (instr.code) {
     case DELETED:
         break;
@@ -975,7 +980,6 @@ ValueEntry* pop()
             load_value(tmp);
             load_value(ret);
             code_instr[curCode++] = create_instr(SLL, val_to_reg(tmp), val_to_reg(tmp), 2);
-            code_instr[curCode++] = create_instr(NEGU, val_to_reg(tmp), val_to_reg(tmp), 0);
             code_instr[curCode++] = create_instr(ADDU, val_to_reg(ret), val_to_reg(ret), val_to_reg(tmp));
             code_instr[curCode++] = create_instr(LW, val_to_reg(ret), val_to_reg(ret), 0);
         }
@@ -1021,7 +1025,7 @@ ValueEntry* pop()
                 (c >= POSTINCATR && c <= DECATR) ||
                 (c >= POSTINCATRV && c <= DECATRV))
                 ret = process_assign_at(c);
-            else if ((c >= LREM && c <= LDIV && c != LOGAND && c != LOGOR) ||
+            else if ((c >= LREM && c <= LDIV) ||
                 (c >= EQEQR && c <= LDIVR))
                 ret = process_binop(c);
             break;
@@ -1360,14 +1364,76 @@ ValueEntry *process_assign_at(int code)
     return ret;
 }
 
+void write_goto_exit_log_and_or(ValueEntry *val, int exit_label, int code)
+{
+    if(code == LOGAND)
+        if(val->emplacement == STATIC)
+        {
+            if(!val->value.integer)
+                code_instr[curCode++] = create_instr(J, -1, exit_label, 0);
+        }
+        else
+            code_instr[curCode++] = create_instr(BEQZ, val_to_reg(val), -1, exit_label);
+    else
+        if(val->emplacement == STATIC)
+        {
+            if(val->value.integer)
+                code_instr[curCode++] = create_instr(J, -1, exit_label, 0);
+        }
+        else
+            code_instr[curCode++] = create_instr(BNEZ, val_to_reg(val), -1, exit_label);
+}
+
+void write_endof_log_and_or(ValueEntry *val, int code, int is_true)
+{
+    if(code == LOGAND)
+        if(val->emplacement == STATIC)
+            val->value.integer = is_true ? 1 : 0;
+        else
+            code_instr[curCode++] = create_instr(ADDIU, val_to_reg(val), $0, is_true ? 1 : 0);
+    else
+        if(val->emplacement == STATIC)
+            val->value.integer = is_true ? 0 : 1;
+        else
+            code_instr[curCode++] = create_instr(ADDIU, val_to_reg(val), $0, is_true ? 0 : 1);
+}
+
 ValueEntry *process_binop(int code)
 {
     ValueEntry *a, *b, *ret;
+    int old_opsp, old_code, exit_label, after_exit_label;
+    if(code == LOGAND || code == LOGOR)
+    {
+        old_opsp = op_sp;
+        old_code = curCode;
+        curCode = 9000;
+        exit_label = curTempLabel++;
+        after_exit_label = curTempLabel++;
+    }
     a = pop();
+    if(code == LOGAND || code == LOGOR)
+        curCode = old_code;
     b = pop();
     if(a->emplacement == STATIC && b->emplacement == STATIC)
     {
         a->value = ret_val_int(a->value, b->value, code);
+        goto end;
+    }
+    if(code == LOGAND || code == LOGOR)
+    {
+        write_goto_exit_log_and_or(b, exit_label, code);
+        old_opsp ^= op_sp;
+        op_sp ^= old_opsp;
+        old_opsp ^= op_sp;
+        a = pop();
+        op_sp = old_opsp;
+        load_value(a);
+        write_goto_exit_log_and_or(a, exit_label, code);
+        write_endof_log_and_or(a, code, 1);
+        code_instr[curCode++] = create_instr(J, -1, after_exit_label, 0);
+        code_instr[curCode++] = create_instr(LABEL, -1, exit_label, 0);
+        write_endof_log_and_or(a, code, 0);
+        code_instr[curCode++] = create_instr(LABEL, -1, after_exit_label, 0);
         goto end;
     }
     load_value(a);
@@ -1381,10 +1447,6 @@ ValueEntry *process_binop(int code)
     }
     switch (code)
     {
-    case LOGAND:
-        break;
-    case LOGOR:
-        break;
     case LSHL:
         code_instr[curCode++] = create_instr(SLLV, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
@@ -1576,6 +1638,7 @@ void process_while()
 
     /* тело */
     process_block();
+    code_instr[curCode++] = create_instr(J, -1, continue_label, 0);
     code_instr[curCode++] = create_instr(LABEL, -1, break_label, 0);
 
     break_label = _break_label, continue_label = _continue_label;
@@ -1782,7 +1845,7 @@ void process_declaration(int old_val_sp)
                 }
                 mips_identref[identref] = val;
                 declarations[identref] = &all_values[all_values_sp++];
-                assign_ValueEntry(&declarations[identref], val);
+                assign_ValueEntry(declarations[identref], val);
             }
                 break;
             default:
@@ -1976,9 +2039,6 @@ void process_expression()
             break;
         case TBegin:
             break;
-        case LOGAND:
-        case LOGOR:
-            break;
         default:
             if ((c >= ASS && c <= DIVASS) ||
                 (c >= ASSV && c <= DIVASSV) ||
@@ -1996,7 +2056,7 @@ void process_expression()
                 (c >= POSTINCATV && c <= DECATV) ||
                 (c >= POSTINCATR && c <= DECATR) ||
                 (c >= POSTINCATRV && c <= DECATRV) ||
-                (c >= LREM && c <= LDIV && c != LOGAND && c != LOGOR) ||
+                (c >= LREM && c <= LDIV) ||
                 (c >= EQEQR && c <= LDIVR))
             {
                 oper.code = c;
