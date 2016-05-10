@@ -100,12 +100,12 @@ typedef enum
     SEQI,
     SNE,
     SNEI,
-
     /** сравнение с плавающей запятой */
     CEQS,
     CLES,
     CLTS,
     /* прочие */
+    CVT_S_W,
     MOVE,
     MOVT,
     MOVF,
