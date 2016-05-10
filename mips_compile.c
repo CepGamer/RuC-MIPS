@@ -731,6 +731,13 @@ ins_instr:
             fprintf(output, temp_data, instr.third_op);
             fprintf(output, "\n");
         }
+        else if(instr.second_op == TEXT)
+        {
+            fill_temp_name(instr.third_op);
+            fprintf(output, "\tlw\t%s,%s\n"
+                    , reg_to_string(instr.first_op)
+                    , temp_name);
+        }
         else
             fprintf(output, "\tlw\t%s,%d(%s)\n"
                     , reg_to_string(instr.first_op)
@@ -1003,8 +1010,8 @@ void load_value(ValueEntry *val)
                     code_instr[curCode++] = create_instr(ADDIU, val_to_reg(&t), $0, val->value.integer);
                     break;
                 case MEM:
-                    if(cur_type >= LINT && cur_type <= LFLOAT)
-                        code_instr[curCode++] = create_instr(LW, val_to_reg(&t), (int)(char*)val->value.pointer, 0);
+                    if(cur_type <= LINT && cur_type >= LFLOAT)
+                        code_instr[curCode++] = create_instr(LW, val_to_reg(&t), TEXT, (int)(char*)val->value.pointer);
                     else
                         code_instr[curCode++] = create_instr(LA_, val_to_reg(&t), (int)(char*)val->value.pointer, 0);
                     break;
@@ -1211,10 +1218,10 @@ ValueEntry *eval_dynamic()
                 code_instr[curCode++] = create_instr(JR, $ra, 0, 0);
                 break;
             case TContinue:
-                code_instr[curCode++] = create_instr(J, -1, continue_label, 0);
+                code_instr[curCode++] = create_instr(J, TEMP_NAME_INDEX, continue_label, 0);
                 break;
             case TBreak:
-                code_instr[curCode++] = create_instr(J, -1, break_label, 0);
+                code_instr[curCode++] = create_instr(J, TEMP_NAME_INDEX, break_label, 0);
                 break;
             case TPrint:
                 if(prev->emplacement != STATIC)
@@ -1505,18 +1512,18 @@ void write_goto_exit_log_and_or(ValueEntry *val, int exit_label, int code)
         if(val->emplacement == STATIC)
         {
             if(!val->value.integer)
-                code_instr[curCode++] = create_instr(J, -1, exit_label, 0);
+                code_instr[curCode++] = create_instr(J, TEMP_NAME_INDEX, exit_label, 0);
         }
         else
-            code_instr[curCode++] = create_instr(BEQZ, val_to_reg(val), -1, exit_label);
+            code_instr[curCode++] = create_instr(BEQZ, val_to_reg(val), TEMP_NAME_INDEX, exit_label);
     else
         if(val->emplacement == STATIC)
         {
             if(val->value.integer)
-                code_instr[curCode++] = create_instr(J, -1, exit_label, 0);
+                code_instr[curCode++] = create_instr(J, TEMP_NAME_INDEX, exit_label, 0);
         }
         else
-            code_instr[curCode++] = create_instr(BNEZ, val_to_reg(val), -1, exit_label);
+            code_instr[curCode++] = create_instr(BNEZ, val_to_reg(val), TEMP_NAME_INDEX, exit_label);
 }
 
 void write_endof_log_and_or(ValueEntry *val, int code, int is_true)
@@ -1568,15 +1575,15 @@ ValueEntry *process_binop(int code)
         load_value(a);
         write_goto_exit_log_and_or(a, exit_label, code);
         write_endof_log_and_or(a, code, 1);
-        code_instr[curCode++] = create_instr(J, -1, after_exit_label, 0);
-        code_instr[curCode++] = create_instr(LABEL, -1, exit_label, 0);
+        code_instr[curCode++] = create_instr(J, TEMP_NAME_INDEX, after_exit_label, 0);
+        code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, exit_label, 0);
         write_endof_log_and_or(a, code, 0);
-        code_instr[curCode++] = create_instr(LABEL, -1, after_exit_label, 0);
+        code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, after_exit_label, 0);
         goto end;
     }
     if(a->emplacement != STATIC)
         load_value(a);
-    else if(b->identref && !(code >= EQEQR && code <= LGER))
+    else
     {
         ret = &all_values[all_values_sp++];
         ret->emplacement = GARBAGE;
@@ -1757,12 +1764,12 @@ void process_for()
     eval_dynamic();
     //  проверка условия
     propagate_constants = 0;
-    code_instr[curCode++] = create_instr(LABEL, -1, cond_label, 0);
+    code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, cond_label, 0);
     drop_temp_regs();
     process_expression();
     tmp = eval_dynamic();
     load_value(tmp);
-    code_instr[curCode++] = create_instr(BEQZ, val_to_reg(tmp), -1, break_label);
+    code_instr[curCode++] = create_instr(BEQZ, val_to_reg(tmp), TEMP_NAME_INDEX, break_label);
     //  Тело цикла
     old_ct = curTree;
     curTree = body_ct;
@@ -1771,14 +1778,14 @@ void process_for()
     old_ct ^= curTree;
     curTree ^= old_ct;
     old_ct ^= curTree;
-    code_instr[curCode++] = create_instr(LABEL, -1, continue_label, 0);
+    code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, continue_label, 0);
     process_expression();
     eval_dynamic();
-    code_instr[curCode++] = create_instr(J, -1, cond_label, 0);
+    code_instr[curCode++] = create_instr(J, TEMP_NAME_INDEX, cond_label, 0);
 
     //  Выход из цикла
     curTree = old_ct;
-    code_instr[curCode++] = create_instr(LABEL, -1, break_label, 0);
+    code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, break_label, 0);
     propagate_constants = 1;
     break_label = _break_label, continue_label = _continue_label;
 }
@@ -1806,16 +1813,16 @@ void process_if()
     else
     {
         load_value(cond);
-        code_instr[curCode++] = create_instr(BEQZ, val_to_reg(cond), -1, else_ref ? else_label : exit_label);
+        code_instr[curCode++] = create_instr(BEQZ, val_to_reg(cond), TEMP_NAME_INDEX, else_ref ? else_label : exit_label);
         //  если условие выполнено
         process_block();
         //  иначе
         if(else_ref)
         {
-            code_instr[curCode++] = create_instr(LABEL, -1, else_label, 0);
+            code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, else_label, 0);
             process_block();
         }
-        code_instr[curCode++] = create_instr(LABEL, -1, exit_label, 0);
+        code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, exit_label, 0);
     }
 }
 
@@ -1831,16 +1838,16 @@ void process_while()
     drop_temp_regs();
 
     /* условие */
-    code_instr[curCode++] = create_instr(LABEL, -1, continue_label, 0);
+    code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, continue_label, 0);
     process_expression();
     tmp = eval_dynamic();
     load_value(tmp);
-    code_instr[curCode++] = create_instr(BEQZ, val_to_reg(tmp), -1, break_label);
+    code_instr[curCode++] = create_instr(BEQZ, val_to_reg(tmp), TEMP_NAME_INDEX, break_label);
 
     /* тело */
     process_block();
-    code_instr[curCode++] = create_instr(J, -1, continue_label, 0);
-    code_instr[curCode++] = create_instr(LABEL, -1, break_label, 0);
+    code_instr[curCode++] = create_instr(J, TEMP_NAME_INDEX, continue_label, 0);
+    code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, break_label, 0);
 
     break_label = _break_label, continue_label = _continue_label;
     propagate_constants = 1;
@@ -1858,16 +1865,16 @@ void process_do_while()
     drop_temp_regs();
 
     /* тело */
-    code_instr[curCode++] = create_instr(LABEL, -1, body_label, 0);
+    code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, body_label, 0);
     process_block();
 
     /* условие */
-    code_instr[curCode++] = create_instr(LABEL, -1, continue_label, 0);
+    code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, continue_label, 0);
     process_expression();
     tmp = eval_dynamic();
     load_value(tmp);
-    code_instr[curCode++] = create_instr(BNEZ, val_to_reg(tmp), -1, body_label);
-    code_instr[curCode++] = create_instr(LABEL, -1, break_label, 0);
+    code_instr[curCode++] = create_instr(BNEZ, val_to_reg(tmp), TEMP_NAME_INDEX, body_label);
+    code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, break_label, 0);
 
     break_label = _break_label, continue_label = _continue_label;
     propagate_constants = 1;
@@ -1915,7 +1922,7 @@ void process_switch()
         }
         else
         {
-            code_instr[curCode++] = create_instr(LABEL, -1, curTempLabel++, 0);
+            code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, curTempLabel++, 0);
             load_value(var);
             if(res->emplacement == STATIC)
             {
@@ -1929,7 +1936,7 @@ void process_switch()
                 load_value(var);
                 code_instr[curCode++] = create_instr(SEQ, val_to_reg(res), val_to_reg(var), val_to_reg(res));
             }
-            code_instr[curCode++] = create_instr(BEQZ, val_to_reg(res), -1, curTempLabel);
+            code_instr[curCode++] = create_instr(BEQZ, val_to_reg(res), TEMP_NAME_INDEX, curTempLabel);
         }
         if(tree[curTree] != TEnd)
             curTree += 2;
@@ -1937,9 +1944,9 @@ void process_switch()
             break;
     }
     stop_track_changes();
-    code_instr[curCode++] = create_instr(LABEL, -1, curTempLabel++, 0);
+    code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, curTempLabel++, 0);
     drop_temp_regs();
-    code_instr[curCode++] = create_instr(LABEL, -1, break_label, 0);
+    code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, break_label, 0);
     break_label = _break;
     curTree++;
 }
