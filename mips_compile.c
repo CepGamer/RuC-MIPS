@@ -176,7 +176,7 @@ int type_from_identref(int identref)
     return identab[identref + 2];
 }
 
-char * name_from_identref(int identref)
+char *name_from_identref(int identref)
 {
     return reprtab + ((identab[identref + 1] + 2 < 28 ? 8 : identab[identref + 1]) + 2);
 }
@@ -203,7 +203,7 @@ Registers val_to_reg(ValueEntry *val)
     return $0;
 }
 
-char * reg_to_string(Registers reg)
+char *reg_to_string(Registers reg)
 {
     static char fp_st[3][5];
     static int ptr = 0;
@@ -281,6 +281,8 @@ void drop_temp_regs()
 
 void save_instr(ValueEntry *val, int code)
 {
+    if(!try_save || !(possible_saved_ptr < temp_regs_count))
+        return;
     if(val->emplacement == TEMP && used_in_cycle[val->value.integer])
         return;
     val->flags |= POSSIBLY_SAVED;
@@ -293,7 +295,8 @@ void save_possibles(int saved_code)
     int i = 0;
     for(i; i < possible_saved_ptr; ++i)
         if(possible_saved[i]
-                && possible_saved[i]->emplacement != GARBAGE)
+                && possible_saved[i]->emplacement != GARBAGE
+                && possible_saved[i]->flags & POSSIBLY_SAVED)
         {
             code_instr[saved_code + i] = code_instr[possible_saved_instr[i]];
             code_instr[possible_saved_instr[i]].code = DELETED;
@@ -1015,7 +1018,7 @@ void load_value(ValueEntry *val)
                 default:
                     break;
                 }
-                if(try_save && val->emplacement != GARBAGE)
+                if(try_save && temp_regs[i] && temp_regs[i]->emplacement != GARBAGE)
                     used_in_cycle[i] = 1;
                 val->emplacement = TEMP;
                 val->value.integer = i;
@@ -1054,7 +1057,15 @@ ValueEntry* pop()
             }
             cur_type = type_from_identref(op_stack[op_sp].value.integer);
             if(ret->emplacement != STATIC)
-                load_value(ret);
+            {
+                if(ret->emplacement != TEMP)
+                {
+                    load_value(ret);
+                    save_instr(ret, curCode - 1);
+                }
+                else
+                    load_value(ret);
+            }
             ret->identref = op_stack[op_sp].value.integer;
             break;
         case TIdent:
@@ -1080,10 +1091,7 @@ ValueEntry* pop()
                     code_instr[curCode++] = create_instr(ADDIU, val_to_reg(ret), $sp
                                                          , (val_sp - declarations[identref]->value.integer) * 4);
                 mips_identref[identref] = ret;
-                if(try_save && possible_saved_ptr < temp_regs_count)
-                {
-                    save_instr(ret, curCode - 1);
-                }
+                save_instr(ret, curCode - 1);
             }
         }
             break;
@@ -1568,10 +1576,11 @@ ValueEntry *process_binop(int code)
     }
     if(a->emplacement != STATIC)
         load_value(a);
-    else if(b->identref)
+    else if(b->identref && !(code >= EQEQR && code <= LGER))
     {
-        mips_identref[b->identref] = NULL;
-        b->identref = 0;
+        ret = &all_values[all_values_sp++];
+        ret->emplacement = GARBAGE;
+        load_value(ret);
     }
     load_value(b);
     if(a->identref)
@@ -1591,97 +1600,97 @@ ValueEntry *process_binop(int code)
     {
     case LSHL:
         if(a->emplacement == STATIC)
-            code_instr[curCode++] = create_instr(SLL, val_to_reg(b), val_to_reg(b), a->value.integer);
+            code_instr[curCode++] = create_instr(SLL, val_to_reg(ret), val_to_reg(b), a->value.integer);
         else
             code_instr[curCode++] = create_instr(SLLV, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LSHR:
         if(a->emplacement == STATIC)
-            code_instr[curCode++] = create_instr(SRA, val_to_reg(b), val_to_reg(b), a->value.integer);
+            code_instr[curCode++] = create_instr(SRA, val_to_reg(ret), val_to_reg(b), a->value.integer);
         else
             code_instr[curCode++] = create_instr(SRAV, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LAND:
         if(a->emplacement == STATIC)
-            code_instr[curCode++] = create_instr(ANDI, val_to_reg(b), val_to_reg(b), a->value.integer);
+            code_instr[curCode++] = create_instr(ANDI, val_to_reg(ret), val_to_reg(b), a->value.integer);
         else
             code_instr[curCode++] = create_instr(AND, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LEXOR:
         if(a->emplacement == STATIC)
-            code_instr[curCode++] = create_instr(XORI, val_to_reg(b), val_to_reg(b), a->value.integer);
+            code_instr[curCode++] = create_instr(XORI, val_to_reg(ret), val_to_reg(b), a->value.integer);
         else
             code_instr[curCode++] = create_instr(XOR, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LOR:
         if(a->emplacement == STATIC)
-            code_instr[curCode++] = create_instr(ORI, val_to_reg(b), val_to_reg(b), a->value.integer);
+            code_instr[curCode++] = create_instr(ORI, val_to_reg(ret), val_to_reg(b), a->value.integer);
         else
             code_instr[curCode++] = create_instr(OR, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LPLUS:
         if(a->emplacement == STATIC)
-            code_instr[curCode++] = create_instr(ADDIU, val_to_reg(b), val_to_reg(b), a->value.integer);
+            code_instr[curCode++] = create_instr(ADDIU, val_to_reg(ret), val_to_reg(b), a->value.integer);
         else
             code_instr[curCode++] = create_instr(ADDU, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LMINUS:
         if(a->emplacement == STATIC)
-            code_instr[curCode++] = create_instr(SUBIU, val_to_reg(b), val_to_reg(b), a->value.integer);
+            code_instr[curCode++] = create_instr(SUBIU, val_to_reg(ret), val_to_reg(b), a->value.integer);
         else
             code_instr[curCode++] = create_instr(SUBU, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LMULT:
         if(a->emplacement == STATIC)
-            code_instr[curCode++] = create_instr(MULI, val_to_reg(b), val_to_reg(b), a->value.integer);
+            code_instr[curCode++] = create_instr(MULI, val_to_reg(ret), val_to_reg(b), a->value.integer);
         else
             code_instr[curCode++] = create_instr(MUL, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LDIV:
         if(a->emplacement == STATIC)
-            code_instr[curCode++] = create_instr(DIVI, val_to_reg(b), val_to_reg(b), a->value.integer);
+            code_instr[curCode++] = create_instr(DIVI, val_to_reg(ret), val_to_reg(b), a->value.integer);
         else
             code_instr[curCode++] = create_instr(DIV, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LREM:
         if(a->emplacement == STATIC)
-            code_instr[curCode++] = create_instr(REMI, val_to_reg(b), val_to_reg(b), a->value.integer);
+            code_instr[curCode++] = create_instr(REMI, val_to_reg(ret), val_to_reg(b), a->value.integer);
         else
             code_instr[curCode++] = create_instr(REM, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case EQEQ:
         if(a->emplacement == STATIC)
-            code_instr[curCode++] = create_instr(SEQI, val_to_reg(b), val_to_reg(b), a->value.integer);
+            code_instr[curCode++] = create_instr(SEQI, val_to_reg(ret), val_to_reg(b), a->value.integer);
         else
             code_instr[curCode++] = create_instr(SEQ, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case NOTEQ:
         if(a->emplacement == STATIC)
-            code_instr[curCode++] = create_instr(SNEI, val_to_reg(b), val_to_reg(b), a->value.integer);
+            code_instr[curCode++] = create_instr(SNEI, val_to_reg(ret), val_to_reg(b), a->value.integer);
         else
             code_instr[curCode++] = create_instr(SNE, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LLT:
         if(a->emplacement == STATIC)
-            code_instr[curCode++] = create_instr(SLTI, val_to_reg(b), val_to_reg(b), a->value.integer);
+            code_instr[curCode++] = create_instr(SLTI, val_to_reg(ret), val_to_reg(b), a->value.integer);
         else
             code_instr[curCode++] = create_instr(SLT, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LGT:
         if(a->emplacement == STATIC)
-            code_instr[curCode++] = create_instr(SGTI, val_to_reg(b), val_to_reg(b), a->value.integer);
+            code_instr[curCode++] = create_instr(SGTI, val_to_reg(ret), val_to_reg(b), a->value.integer);
         else
             code_instr[curCode++] = create_instr(SGT, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LLE:
         if(a->emplacement == STATIC)
-            code_instr[curCode++] = create_instr(SLEI, val_to_reg(b), val_to_reg(b), a->value.integer);
+            code_instr[curCode++] = create_instr(SLEI, val_to_reg(ret), val_to_reg(b), a->value.integer);
         else
             code_instr[curCode++] = create_instr(SLE, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
     case LGE:
         if(a->emplacement == STATIC)
-            code_instr[curCode++] = create_instr(SGEI, val_to_reg(b), val_to_reg(b), a->value.integer);
+            code_instr[curCode++] = create_instr(SGEI, val_to_reg(ret), val_to_reg(b), a->value.integer);
         else
             code_instr[curCode++] = create_instr(SGE, val_to_reg(a), val_to_reg(b), val_to_reg(a));
         break;
@@ -1730,9 +1739,7 @@ ValueEntry *process_binop(int code)
         break;
     }
 end:
-    if(a->emplacement == STATIC)
-        ret = b;
-    else
+    if(a->emplacement != STATIC)
         ret = a;
     return ret;
 }
@@ -1820,7 +1827,7 @@ void process_while()
 
     propagate_constants = 0;
     try_save = 1;
-    curCode += 10;
+    curCode += temp_regs_count;
     drop_temp_regs();
 
     /* условие */
