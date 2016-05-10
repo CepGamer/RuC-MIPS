@@ -285,6 +285,7 @@ void drop_temp_regs()
     for(i = 0; i < float_temp_regs_count; ++i)
         if(float_temp_regs[i])
             float_temp_regs[i]->emplacement = GARBAGE;
+    possible_saved_ptr = 0;
 }
 
 void save_instr(ValueEntry *val, int code)
@@ -301,6 +302,8 @@ void save_instr(ValueEntry *val, int code)
 void save_possibles(int saved_code)
 {
     int i = 0;
+    if(!try_save || had_func_call)
+        return;
     for(i; i < possible_saved_ptr; ++i)
         if(possible_saved[i]
                 && possible_saved[i]->emplacement != GARBAGE
@@ -499,6 +502,12 @@ ins_instr:
                 , reg_to_string(instr.first_op)
                 , reg_to_string(instr.second_op)
                 , reg_to_string(instr.third_op));
+        break;
+    case MULI:
+        fprintf(output, "\tmul\t%s,%s,%d\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op)
+                , instr.third_op);
         break;
     case DIV:
     case REM:
@@ -828,17 +837,19 @@ void write_data(IdentEntry data)
     case ROWROWOFFLOAT:
     {
         int size = data.dim_sizes[0];
+        if(data.dimensions == 2)
+            size *= data.dim_sizes[1];
         if(data.value.pointer)
         {
-            if(data.dimensions == 2)
-                size *= data.dim_sizes[1];
             fprintf(output, ".word\t");
             for(i = 0; i < size - 1; ++i)
                 fprintf(output, "%d, ", ((Value *)data.value.pointer)[i].integer);
             fprintf(output, "%d\n", ((Value *)data.value.pointer)[size - 1].integer);
         }
         else
+        {
             fprintf(output, ".space\t%d\n", size * sizeof(int));
+        }
     }
         break;
     case ROWOFCHAR:
@@ -945,6 +956,10 @@ Value ret_val_int(Value a, Value b, int code)
     case LGE:
         ret.integer = b.integer >= a.integer;
         break;
+    case ASSV:
+    case ASS:
+        ret.integer = b.integer;
+        break;
     default:
         break;
     }
@@ -1009,7 +1024,7 @@ void load_value(ValueEntry *val)
                 float_temp_regs[i] = val;
                 return;
             }
-        if(float_temp_regs[nxt_float]->flags & PROTECTED)
+        if(float_temp_regs[nxt_float] && float_temp_regs[nxt_float]->flags & PROTECTED)
             nxt_float++;
         nxt_float %= float_temp_regs_count;
         float_temp_regs[i = nxt_float++]->emplacement = GARBAGE;
@@ -1055,7 +1070,7 @@ void load_value(ValueEntry *val)
                 temp_regs[i] = val;
                 return;
             }
-        if(float_temp_regs[nxt]->flags & PROTECTED)
+        if(temp_regs[nxt] && temp_regs[nxt]->flags & PROTECTED)
             nxt++;
         nxt %= temp_regs_count;
         temp_regs[i = nxt++]->emplacement = GARBAGE;
@@ -1132,16 +1147,33 @@ ValueEntry *pop()
                 tmp = pop();
                 a = &all_values[all_values_sp++];
                 a->emplacement = GARBAGE;
+                //  TODO защищать загрузку везде
+                tmp->flags |= PROTECTED;
+                ret->flags |= PROTECTED;
                 load_value(a);
+                tmp->flags &= (ALL ^ PROTECTED);
+                ret->flags &= (ALL ^ PROTECTED);
                 if(tmp->emplacement == STATIC)
-                    code_instr[curCode++] = create_instr(LI_, val_to_reg(a), tmp->value.integer, 0);
+                {
+                    if(i == 0 && declarations[identref]->ident->dimensions > 1)
+                        tmp->value.integer *= declarations[identref]->ident->dim_sizes[1];
+                    tmp->value.integer <<= 2;
+                    if(declarations[identref]->emplacement == STATIC)
+                        tmp->value.integer *= -1;
+                    code_instr[curCode++] = create_instr(ADDIU, val_to_reg(a), val_to_reg(ret), tmp->value.integer);
+                    tmp = a;
+                }
                 else
+                {
                     code_instr[curCode++] = create_instr(MOVE, val_to_reg(a), val_to_reg(tmp), 0);
-                tmp = a;
-                code_instr[curCode++] = create_instr(SLL, val_to_reg(tmp), val_to_reg(tmp), 2);
-                if(declarations[identref]->emplacement == STATIC)
-                    code_instr[curCode++] = create_instr(NEGU, val_to_reg(tmp), val_to_reg(tmp), 0);
-                code_instr[curCode++] = create_instr(ADDU, val_to_reg(tmp), val_to_reg(ret), val_to_reg(tmp));
+                    tmp = a;
+                    if(i == 0 && declarations[identref]->ident->dimensions > 1)
+                        code_instr[curCode++] = create_instr(MULI, val_to_reg(tmp), val_to_reg(tmp), declarations[identref]->ident->dim_sizes[1]);
+                    code_instr[curCode++] = create_instr(SLL, val_to_reg(tmp), val_to_reg(tmp), 2);
+                    if(declarations[identref]->emplacement == STATIC)
+                        code_instr[curCode++] = create_instr(NEGU, val_to_reg(tmp), val_to_reg(tmp), 0);
+                    code_instr[curCode++] = create_instr(ADDU, val_to_reg(tmp), val_to_reg(ret), val_to_reg(tmp));
+                }
                 ret = tmp;
             }
             cur_type = type_from_identref(identref);
@@ -1315,7 +1347,7 @@ void assign_to_ValueEntry(ValueEntry *to_ass, ValueEntry *new_val)
         code_instr[curCode++] = create_instr(LA_, val_to_reg(c), (char*)to_ass->value.pointer, 0);
         load_value(new_val);
         code_instr[curCode++] = create_instr(SW, val_to_reg(new_val), val_to_reg(c), 0);
-        if(to_ass->previous_save)
+        if(to_ass->previous_save && 0)
             to_ass->previous_save->code = DELETED;
         to_ass->previous_save = &code_instr[curCode - 1];
     }
@@ -1323,7 +1355,7 @@ void assign_to_ValueEntry(ValueEntry *to_ass, ValueEntry *new_val)
     {
         load_value(new_val);
         code_instr[curCode++] = create_instr(SW, val_to_reg(new_val), $sp, (val_sp - to_ass->value.integer) * 4);
-        if(to_ass->previous_save)
+        if(to_ass->previous_save && 0)
             to_ass->previous_save->code = DELETED;
         to_ass->previous_save = &code_instr[curCode - 1];
     }
@@ -1344,39 +1376,43 @@ ValueEntry *process_assign(int code)
         (code >= ASSV && code <= DIVASSV) ||
         (code >= PLUSASSRV && code <= DIVASSRV))
     {
-        ValueEntry *a = pop(), *b = pop(), *t, *mips_ident = NULL;
+        ValueEntry *a = pop(), *b = pop(), *t, **mips_ident = NULL;
         if(a->emplacement == STATIC && b->emplacement == IDENT_)
         {
             if(track_changes)
                 changed_ids[curChangedId++] = create_ident_diff(b->value.integer, *mips_identref[b->value.integer]);
-            if(mips_identref[b->value.integer]->emplacement == STATIC)
+            if(propagate_constants
+                    && mips_identref[b->value.integer]->emplacement == STATIC
+                    && 0)
             {
                 mips_identref[b->value.integer]->value = ret_val_int(mips_identref[b->value.integer]->value, a->value, code);
                 a->emplacement = GARBAGE;
                 b->emplacement = GARBAGE;
                 return mips_identref[b->value.integer];
             }
-            mips_ident = mips_identref[b->value.integer];
+            mips_ident = &mips_identref[b->value.integer];
             b->emplacement = GARBAGE;
+            cur_type = type_from_identref(b->value.integer);
             b = declarations[b->value.integer];
         }
         else if (b->emplacement == IDENT_)
         {
             if(track_changes)
                 changed_ids[curChangedId++] = create_ident_diff(b->value.integer, *mips_identref[b->value.integer]);
-            mips_ident = mips_identref[b->value.integer];
+            mips_ident = &mips_identref[b->value.integer];
             b->emplacement = GARBAGE;
+            cur_type = type_from_identref(b->value.integer);
             b = declarations[b->value.integer];
             b->flags &= ALL ^ CONSTANT;
         }
-        //  TODO а->emplacement == STATIC
         if(code != ASS && code != ASSV)
         {
             t = copy_value_entry(b);
-            if(mips_ident->emplacement == GARBAGE)
+            if(!propagate_constants
+                || (*mips_ident)->emplacement == GARBAGE)
                 load_value(t);
             else
-                load_value(t = mips_ident);
+                load_value(t = *mips_ident);
             switch (code)
             {
             case REMASS:
@@ -1456,10 +1492,7 @@ ValueEntry *process_assign(int code)
         }
         assign_to_ValueEntry(b, a);
         if(mips_ident)
-        {
-            mips_ident->emplacement = a->emplacement;
-            mips_ident->value = a->value;
-        }
+            *mips_ident = a;
         return a;
     }
     else if((code >= POSTINC && code <= DEC) ||
@@ -1472,9 +1505,11 @@ ValueEntry *process_assign(int code)
         {
             b = mips_identref[a->value.integer];
             a->emplacement = GARBAGE;
-            a = declarations[a->value.integer];
-            if(!b)
+            if(!b
+                    || b->emplacement == GARBAGE)
                 b = copy_value_entry(declarations[a->value.integer]);
+            cur_type = type_from_identref(a->value.integer);
+            a = declarations[a->value.integer];
         }
         if(!propagate_constants && b->emplacement == STATIC)
         {
@@ -1502,7 +1537,7 @@ ValueEntry *process_assign(int code)
                     code_instr[curCode++] = create_instr(ADDIU, val_to_reg(c), val_to_reg(b), 0);
                 ret = c;
             }
-            if(b->emplacement == STATIC)
+            if(propagate_constants && b->emplacement == STATIC)
                 b->value.integer++;
             else
                 code_instr[curCode++] = create_instr(ADDIU, val_to_reg(b), val_to_reg(b), 1);
@@ -1798,36 +1833,49 @@ end:
 void process_for()
 {
     int cond_label = curTempLabel++, _break_label = break_label, _continue_label = continue_label, saved_code;
+    int is_init = tree[curTree], is_cond = tree[curTree + 1], is_incr = tree[curTree + 2];
     int old_ct, body_ct;
     ValueEntry *tmp;
     break_label = curTempLabel++, continue_label = curTempLabel++;
     body_ct = tree[curTree + 3];
     curTree += 4;
     //  инициализация
-    process_expression();
-    eval_dynamic();
+    if(is_init)
+    {
+        process_expression();
+        eval_dynamic();
+    }
     //  проверка условия
     propagate_constants = 0;
     try_save = 1;
+    possible_saved_ptr = 0;
     drop_temp_regs();
     saved_code = curCode;
-    code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, cond_label, 0);
     curCode += temp_regs_count;
-    process_expression();
-    tmp = eval_dynamic();
-    load_value(tmp);
-    code_instr[curCode++] = create_instr(BEQZ, val_to_reg(tmp), TEMP_NAME_INDEX, break_label);
+    code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, cond_label, 0);
+    if(is_cond)
+    {
+        process_expression();
+        tmp = eval_dynamic();
+        load_value(tmp);
+        code_instr[curCode++] = create_instr(BEQZ, val_to_reg(tmp), TEMP_NAME_INDEX, break_label);
+    }
     //  Тело цикла
     old_ct = curTree;
     curTree = body_ct;
-    process_block();
+    if(body_ct)
+        process_block();
+    drop_temp_regs();
     //  инкремент
     old_ct ^= curTree;
     curTree ^= old_ct;
     old_ct ^= curTree;
     code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, continue_label, 0);
-    process_expression();
-    eval_dynamic();
+    if(is_incr)
+    {
+        process_expression();
+        eval_dynamic();
+    }
     code_instr[curCode++] = create_instr(J, TEMP_NAME_INDEX, cond_label, 0);
 
     //  Выход из цикла
@@ -2130,7 +2178,7 @@ void process_declaration(int old_val_sp)
 
 void process_function()
 {
-    int identref = tree[curTree++], args, sp_add_code;
+    int identref = tree[curTree++], args, sp_add_code, old_val_sp;
     int i;
     ValueEntry *func = &all_values[all_values_sp++];
     curTree++;
@@ -2176,8 +2224,9 @@ void process_function()
     fp_codes_ptr = had_func_call = 0;
 
     /* Определения */
+    old_val_sp = val_sp;
     while (tree[curTree] == TDeclid)
-        process_declaration(val_sp);
+        process_declaration(old_val_sp);
 
     code_instr[sp_add_code + 0].third_op = -val_sp * 4;
     code_instr[sp_add_code + 1].third_op = val_sp * 4;
@@ -2244,9 +2293,10 @@ void process_expression()
             if(declarations[oper.value.integer]->ident->dimensions > 1)
             {
                 int j;
-                for(i = declarations[oper.value.integer]->ident->dimensions; i > 0; ++i)
+                for(i = declarations[oper.value.integer]->ident->dimensions; i > 0; --i)
                     for(j = stack_pointers[i - 1]; j < stack_pointers[i]; ++j)
                         tmp_opstack[tmp_sp++] = op_stack[j];
+                --j;
                 for(i = 0; i < tmp_sp; ++i)
                     op_stack[j + i] = tmp_opstack[i];
             }
@@ -2255,21 +2305,21 @@ void process_expression()
             break;
         case TFor:
             process_for();
-            break;
+            return;
         case TIf:
             process_if();
-            break;
+            return;
         case TSwitch:
             process_switch();
-            break;
+            return;
         case TWhile:
             curTree++;
             process_while();
-            break;
+            return;
         case TDo:
             curTree++;
             process_do_while();
-            break;
+            return;
         case TLabel:
         case TGoto:
             curTree++;
