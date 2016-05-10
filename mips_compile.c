@@ -277,6 +277,9 @@ void drop_temp_regs()
             temp_regs[i]->emplacement = GARBAGE;
         used_in_cycle[i] = 0;
     }
+    for(i = 0; i < float_temp_regs_count; ++i)
+        if(float_temp_regs[i])
+            float_temp_regs[i]->emplacement = GARBAGE;
 }
 
 void save_instr(ValueEntry *val, int code)
@@ -759,6 +762,11 @@ ins_instr:
                 , instr.third_op
                 , reg_to_string(instr.second_op));
         break;
+    case CVT_S_W:
+        fprintf(output, "\tcvt.s.w\t%s,%s\n"
+                , reg_to_string(instr.first_op)
+                , reg_to_string(instr.second_op));
+        break;
     case MOVT:
         fprintf(output, "\tmovt\t%s,%s\n"
                 , reg_to_string(instr.first_op)
@@ -1140,6 +1148,12 @@ ValueEntry* pop()
             ret = &all_values[all_values_sp++];
             ret->emplacement = OTHER;
             ret->value.integer = $v0;
+            break;
+        case WIDEN1:
+            ret = pop();
+            cur_type = LFLOAT;
+            load_value(ret);
+            code_instr[curCode++] = create_instr(CVT_S_W, val_to_reg(ret), val_to_reg(ret), 0);
             break;
         default:
             if ((c >= ASS && c <= DIVASS) ||
@@ -2214,7 +2228,7 @@ void process_expression()
                 if(r->emplacement == STATIC)
                     code_instr[curCode++] = create_instr(ADDIU, $a0 + i, $0, r->value.integer);
                 else
-                    code_instr[curCode++] = create_instr(ADDIU, $a0 + i, val_to_reg(r), 0);
+                    code_instr[curCode++] = create_instr(MOVE, $a0 + i, val_to_reg(r), 0);
             }
             break;
         case TCall2:
@@ -2267,7 +2281,8 @@ void process_expression()
                 (c >= POSTINCATR && c <= DECATR) ||
                 (c >= POSTINCATRV && c <= DECATRV) ||
                 (c >= LREM && c <= LDIV) ||
-                (c >= EQEQR && c <= LDIVR))
+                (c >= EQEQR && c <= LDIVR) ||
+                (c == WIDEN1))
             {
                 oper.code = c;
                 op_stack[op_sp++] = oper;
