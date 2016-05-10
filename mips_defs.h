@@ -151,11 +151,13 @@ typedef struct
 
 typedef struct
 {
-    char * name;
+    char *name;
     int type;
-    int size;
+    int dimensions;
+    int dim_sizes[2];
     Value value;
     int label;
+    int level;
 } IdentEntry;
 
 typedef struct
@@ -165,6 +167,7 @@ typedef struct
     int flags;
     Instruction *previous_save;
     int identref;
+    IdentEntry *ident;
 } ValueEntry;
 
 typedef struct

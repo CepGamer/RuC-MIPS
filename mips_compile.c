@@ -72,8 +72,8 @@ ValueEntry *possible_saved[10 /* temp_regs_count */];
 int possible_saved_instr[10 /* temp_regs_count */];
 int used_in_cycle[10 /* temp_regs_count */];
 int possible_saved_ptr;
-int try_save;
 
+int try_save = 0;
 int propagate_constants = 1;
 int delayed_slot = 1;
 
@@ -82,6 +82,9 @@ void assign_ValueEntry(ValueEntry *ptr, ValueEntry *to_ass)
     ptr->emplacement = to_ass->emplacement;
     ptr->flags = to_ass->flags;
     ptr->value = to_ass->value;
+    ptr->ident = to_ass->ident;
+    ptr->identref = to_ass->identref;
+    ptr->previous_save = to_ass->previous_save;
 }
 
 ValueEntry *copy_value_entry(ValueEntry *entry)
@@ -92,11 +95,13 @@ ValueEntry *copy_value_entry(ValueEntry *entry)
     return ret;
 }
 
-IdentEntry create_entry(char *name, int size, int type, Value value, int label)
+IdentEntry create_entry(char *name, int dims, int size1, int size2, int type, Value value, int label)
 {
     IdentEntry ret;
     ret.name = name;
-    ret.size = size;
+    ret.dimensions = dims;
+    ret.dim_sizes[0] = size1;
+    ret.dim_sizes[1] = size2;
     ret.type = type;
     ret.value = value;
     ret.label = label;
@@ -795,6 +800,8 @@ ins_instr:
 
 void write_data(IdentEntry data)
 {
+    if(data.level)
+        return;
     if(data.name == temp_data)
     {
         fprintf(output, temp_data, data.label);
@@ -819,15 +826,20 @@ void write_data(IdentEntry data)
     case ROWROWOFINT:
     case ROWOFFLOAT:
     case ROWROWOFFLOAT:
+    {
+        int size = data.dim_sizes[0];
         if(data.value.pointer)
         {
+            if(data.dimensions == 2)
+                size *= data.dim_sizes[1];
             fprintf(output, ".word\t");
-            for(i = 0; i < data.size - 1; ++i)
+            for(i = 0; i < size - 1; ++i)
                 fprintf(output, "%d, ", ((Value *)data.value.pointer)[i].integer);
-            fprintf(output, "%d\n", ((Value *)data.value.pointer)[data.size - 1].integer);
+            fprintf(output, "%d\n", ((Value *)data.value.pointer)[size - 1].integer);
         }
         else
-            fprintf(output, ".space\t%d\n", data.size * sizeof(int));
+            fprintf(output, ".space\t%d\n", size * sizeof(int));
+    }
         break;
     case ROWOFCHAR:
     case ROWROWOFCHAR:
@@ -979,7 +991,7 @@ void load_value(ValueEntry *val)
                     code_instr[curCode++] = create_instr(ADDIU, val_to_reg(&t), $0, val->value.integer);
                     break;
                 case MEM:
-                    data_entries[curData++] = create_entry(temp_data, 0, LFLOAT, val->value, curTempData);
+                    data_entries[curData++] = create_entry(temp_data, 0, 0, 0, LFLOAT, val->value, curTempData);
                     code_instr[curCode++] = create_instr(LW, val_to_reg(&t), temp_data, curTempData++);
                     break;
                 case OTHER:
@@ -1006,7 +1018,7 @@ void load_value(ValueEntry *val)
     else
     {
     cycle:
-        for(i; i < temp_regs_count; ++i)
+        for(; i < temp_regs_count; ++i)
             if(!temp_regs[i] || temp_regs[i]->emplacement != TEMP)
             {
                 ValueEntry t;
@@ -1028,7 +1040,10 @@ void load_value(ValueEntry *val)
                     code_instr[curCode++] = create_instr(MOVE, val_to_reg(&t), val_to_reg(val), 0);
                     break;
                 case STACK:
-                    code_instr[curCode++] = create_instr(LW, val_to_reg(&t), $sp, (val_sp - val->value.integer) * 4);
+                    if(cur_type <= LINT && cur_type >= LFLOAT)
+                        code_instr[curCode++] = create_instr(LW, val_to_reg(&t), $sp, (val_sp - val->value.integer) * 4);
+                    else
+                        code_instr[curCode++] = create_instr(ADDIU, val_to_reg(&t), $sp, (val_sp - val->value.integer) * 4);
                     break;
                 default:
                     break;
@@ -1048,9 +1063,11 @@ void load_value(ValueEntry *val)
     }
 }
 
-ValueEntry* pop()
+ValueEntry *eval_dynamic();
+
+ValueEntry *pop()
 {
-    ValueEntry* ret;
+    ValueEntry *ret;
     int c;
     if(op_sp--)
         switch (c = op_stack[op_sp].code)
@@ -1078,8 +1095,6 @@ ValueEntry* pop()
                     load_value(ret);
                     save_instr(ret, curCode - 1);
                 }
-                else
-                    load_value(ret);
             }
             ret->identref = op_stack[op_sp].value.integer;
             break;
@@ -1092,8 +1107,11 @@ ValueEntry* pop()
         case TSliceident:
         {
             int identref = op_stack[op_sp].value.integer;
+            int i;
             if(mips_identref[identref]
-                    && mips_identref[identref]->emplacement != GARBAGE)
+                    && mips_identref[identref]->emplacement != GARBAGE
+                    && mips_identref[identref]->emplacement != MEM
+                    && mips_identref[identref]->emplacement != STACK)
                 ret = mips_identref[identref];
             else
             {
@@ -1108,23 +1126,38 @@ ValueEntry* pop()
                 mips_identref[identref] = ret;
                 save_instr(ret, curCode - 1);
             }
+            for(i = 0; i < declarations[identref]->ident->dimensions; ++i)
+            {
+                ValueEntry *a, *tmp;
+                tmp = pop();
+                a = &all_values[all_values_sp++];
+                a->emplacement = GARBAGE;
+                load_value(a);
+                if(tmp->emplacement == STATIC)
+                    code_instr[curCode++] = create_instr(LI_, val_to_reg(a), tmp->value.integer, 0);
+                else
+                    code_instr[curCode++] = create_instr(MOVE, val_to_reg(a), val_to_reg(tmp), 0);
+                tmp = a;
+                code_instr[curCode++] = create_instr(SLL, val_to_reg(tmp), val_to_reg(tmp), 2);
+                if(declarations[identref]->emplacement == STATIC)
+                    code_instr[curCode++] = create_instr(NEGU, val_to_reg(tmp), val_to_reg(tmp), 0);
+                code_instr[curCode++] = create_instr(ADDU, val_to_reg(tmp), val_to_reg(ret), val_to_reg(tmp));
+                ret = tmp;
+            }
+            cur_type = type_from_identref(identref);
         }
             break;
         case TAddrtoval:
         {
-            ValueEntry *tmp, *a;
-            tmp = pop();
-            ret = pop();
+            ValueEntry *a;
             a = &all_values[all_values_sp++];
             a->emplacement = GARBAGE;
-            load_value(a);
-            code_instr[curCode++] = create_instr(MOVE, val_to_reg(a), val_to_reg(tmp), 0);
-            tmp = a;
+            ret = pop();
             load_value(ret);
-            code_instr[curCode++] = create_instr(SLL, val_to_reg(tmp), val_to_reg(tmp), 2);
-            code_instr[curCode++] = create_instr(ADDU, val_to_reg(tmp), val_to_reg(ret), val_to_reg(tmp));
-            code_instr[curCode++] = create_instr(LW, val_to_reg(tmp), val_to_reg(tmp), 0);
-            ret = tmp;
+            load_value(a);
+
+            code_instr[curCode++] = create_instr(LW, val_to_reg(a), val_to_reg(ret), 0);
+            ret = a;
         }
             break;
         case TCall1:
@@ -1504,9 +1537,6 @@ ValueEntry *process_assign_at(int code)
     b = pop();
     load_value(a);
     load_value(b);
-    code_instr[curCode++] = create_instr(ADDU, val_to_reg(a), val_to_reg(a), val_to_reg(b));
-    b = pop();
-    load_value(b);
     switch (code)
     {
     case ASSAT:
@@ -1767,7 +1797,7 @@ end:
 
 void process_for()
 {
-    int cond_label = curTempLabel++, _break_label = break_label, _continue_label = continue_label;
+    int cond_label = curTempLabel++, _break_label = break_label, _continue_label = continue_label, saved_code;
     int old_ct, body_ct;
     ValueEntry *tmp;
     break_label = curTempLabel++, continue_label = curTempLabel++;
@@ -1778,8 +1808,11 @@ void process_for()
     eval_dynamic();
     //  проверка условия
     propagate_constants = 0;
-    code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, cond_label, 0);
+    try_save = 1;
     drop_temp_regs();
+    saved_code = curCode;
+    code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, cond_label, 0);
+    curCode += temp_regs_count;
     process_expression();
     tmp = eval_dynamic();
     load_value(tmp);
@@ -1802,6 +1835,8 @@ void process_for()
     code_instr[curCode++] = create_instr(LABEL, TEMP_NAME_INDEX, break_label, 0);
     propagate_constants = 1;
     break_label = _break_label, continue_label = _continue_label;
+    save_possibles(saved_code);
+    try_save = 0;
 }
 
 void process_if()
@@ -2024,12 +2059,14 @@ void process_declaration(int old_val_sp)
                 data.value.pointer = NULL;
                 process_expression();
                 temp = eval_static();
-                size = temp.integer;
+                data.dim_sizes[0] = size = temp.integer;
+                data.dimensions = 1;
                 if(N == 2)
                 {
                     process_expression();
                     temp = eval_static();
-                    size *= temp.integer;
+                    size *= data.dim_sizes[1] = temp.integer;
+                    ++data.dimensions;
                 }
                 if(initref)
                 {
@@ -2052,7 +2089,6 @@ void process_declaration(int old_val_sp)
                         }
                     }
                 }
-                data.size = size;
                 data.name = name_from_identref(identref);
                 data.type = type_from_identref(identref);
                 if(level)
@@ -2065,8 +2101,10 @@ void process_declaration(int old_val_sp)
                 {
                     val->emplacement = MEM;
                     val->value.pointer = data.name;
-                    data_entries[curData++] = data;
                 }
+                data.level = level;
+                data_entries[curData++] = data;
+                val->ident = &data_entries[curData - 1];
                 mips_identref[identref] = val;
                 declarations[identref] = &all_values[all_values_sp++];
                 assign_ValueEntry(declarations[identref], val);
@@ -2190,12 +2228,30 @@ void process_expression()
             op_stack[op_sp++] = oper;
             break;
         case TSliceident:
+        {
+            int stack_pointers[3], tmp_sp = 0;
+            Operation tmp_opstack[20];
             if(op_sp && op_stack[op_sp - 1].code == TIdent)
                 --op_sp;
             oper.code = TSliceident;
             oper.value.integer = tree[curTree++];
+            for(i = 0; i < declarations[oper.value.integer]->ident->dimensions; ++i)
+            {
+                stack_pointers[i] = op_sp;
+                process_expression();
+            }
+            stack_pointers[declarations[oper.value.integer]->ident->dimensions] = op_sp;
+            if(declarations[oper.value.integer]->ident->dimensions > 1)
+            {
+                int j;
+                for(i = declarations[oper.value.integer]->ident->dimensions; i > 0; ++i)
+                    for(j = stack_pointers[i - 1]; j < stack_pointers[i]; ++j)
+                        tmp_opstack[tmp_sp++] = op_stack[j];
+                for(i = 0; i < tmp_sp; ++i)
+                    op_stack[j + i] = tmp_opstack[i];
+            }
             op_stack[op_sp++] = oper;
-            process_expression();
+        }
             break;
         case TFor:
             process_for();
