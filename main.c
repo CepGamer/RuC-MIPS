@@ -59,11 +59,11 @@ int main()
     
     for (i=0; i<256; i++)
         hashtab[i] = 0;
-    output = fopen("../tree.txt", "wt");
+    output = fopen("tree.txt", "wt");
     
 // занесение ключевых слов в reprtab
     keywordsnum = 1;
-    input =  fopen("../keywords.txt", "r");
+    input =  fopen("keywords.txt", "r");
     getnext();
     nextch();
     while (scan() != LEOF)
@@ -92,7 +92,7 @@ int main()
     tablesandtree();
     fclose(output);
     
-    output = fopen("../codes.txt", "wt");
+    output = fopen("codes.txt", "wt");
     
     codegen();
 
@@ -101,7 +101,7 @@ int main()
     fclose(input);
     fclose(output);
     
-    output = fopen("../export.txt", "wt");
+    output = fopen("export.txt", "wt");
     fprintf(output, "%i %i %i %i %i\n", pc, funcnum, id, rp, maxdisplg);
     
     for (i=0; i<pc; i++)
